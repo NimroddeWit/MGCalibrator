@@ -4,6 +4,8 @@
 #include <string>
 #include <filesystem>
 #include <vector>
+#include "count_fastq_bases.h"
+#include "read_metadata.h"
 
 void printHelp(const char* programName) {
     std::cout << "Usage: " << programName << " [options]\n"
@@ -17,84 +19,77 @@ void printHelp(const char* programName) {
 }
 
 int main(int argc, char* argv[]) {
-    std::string fileExtension = ".fastq"; // Default value for file extension
-    std::string metagenomesDir;
-    std::string metadataFile;
-    std::string countsFile;
-    std::string outputFile;
-
     if (argc == 1) {
         printHelp(argv[0]);
         return 1; // Exit if no arguments are provided
     }
 
+    std::string file_extension = ".fastq"; 
+    std::string metagenomes_dir;
+    std::string metadata_file;
+    std::string counts_file;
+    std::string output_file;
+
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "--help") {
             printHelp(argv[0]);
-            return 0; // Exit after displaying help
+            return 0; 
         } else if (arg == "--metagenomes" && i + 1 < argc) {
-            metagenomesDir = argv[++i];
+            metagenomes_dir = argv[++i];
         } else if (arg == "--extension" && i + 1 < argc) {
-            fileExtension = argv[++i];
+            file_extension = argv[++i];
         } else if (arg == "--meta" && i + 1 < argc) {
-            metadataFile = argv[++i];
+            metadata_file = argv[++i];
         } else if (arg == "--counts" && i + 1 < argc) {
-            countsFile = argv[++i];
+            counts_file = argv[++i];
         } else if (arg == "--output" && i + 1 < argc) {
-            outputFile = argv[++i];
+            output_file = argv[++i];
         } else {
             std::cerr << "Invalid or unrecognized option: " << arg << std::endl;
-            return 1;  // exit if the option is unrecognized
+            return 1;
         }
     }
 
-    // Check if all required parameters are provided
-    if (metagenomesDir.empty() || metadataFile.empty() || countsFile.empty() || outputFile.empty()) {
+    if (metagenomes_dir.empty() || metadata_file.empty() || counts_file.empty() || output_file.empty()) {
         std::cerr << "Error: Missing required parameters.\n";
         printHelp(argv[0]);
-        return 1; // Exit if any required parameter is missing
+        return 1;
+    }
+
+    std::unordered_map<std::string, double> metadata;
+    try {
+        metadata = read_metadata(metadata_file);
+    } catch (const std::exception& e) {
+        std::cerr << "Error reading metadata: " << e.what() << std::endl;
+        return 2; // Exit the program with an error code
     }
 
     std::vector<std::pair<std::string, std::unordered_map<char, int>>> sample_nucleotide_counts;
-
     try {
-        for (const auto& entry : std::filesystem::directory_iterator(metagenomesDir)) {
-            if (entry.path().extension() == fileExtension) {
-                std::unordered_map<char, int> nucleotide_counts = {{'A', 0}, {'C', 0}, {'G', 0}, {'T', 0}, {'N', 0}};
-                std::ifstream file_in(entry.path());
-                std::string line;
-                int line_count = 0;
-
-                while (std::getline(file_in, line)) {
-                    if (++line_count == 2) {
-                        for (char nt : line) {
-                            if (nucleotide_counts.find(nt) != nucleotide_counts.end()) {
-                                nucleotide_counts[nt]++;
-                            }
-                        }
-                        std::getline(file_in, line); // Skip '+'
-                        std::getline(file_in, line); // Skip quality scores
-                        line_count = 0; // Reset line counter for the next record
-                    }
-                }
-
-                // Store the filename and the counts in the vector
-                sample_nucleotide_counts.push_back({entry.path().filename(), nucleotide_counts});
+        for (const auto& entry : std::filesystem::directory_iterator(metagenomes_dir)) {
+            if (entry.path().extension() == file_extension) {
+                auto nucleotide_counts = count_fastq_bases(entry.path());
+                sample_nucleotide_counts.push_back({entry.path().filename().stem(), nucleotide_counts});
             }
-        }
-        
-        // Optionally, output the counts for each file
-        for (const auto& [filename, counts] : sample_nucleotide_counts) {
-            std::cout << "File: " << filename << "\n";
-            for (const auto& [nt, count] : counts) {
-                std::cout << nt << ": " << count << '\n';
-            }
-            std::cout << "-----------------\n";
         }
     } catch (const std::exception& e) {
         std::cerr << "Error processing files: " << e.what() << '\n';
         return 1;
+    }
+
+    // Output the nucleotide counts and metadata for each sample
+    for (const auto& sample : sample_nucleotide_counts) {
+        std::cout << "Sample: " << sample.first << std::endl;
+        for (const auto& pair : sample.second) {
+            std::cout << "  " << pair.first << ": " << pair.second << std::endl;
+        }
+        if (metadata.find(sample.first) != metadata.end()) {
+            std::cout << "DNA Concentration: " << metadata[sample.first] << std::endl;
+        } else {
+            std::cout << "DNA Concentration: Not available" << std::endl;
+        }
+        std::cout << "-------------------------------------\n";
     }
 
     return 0;
