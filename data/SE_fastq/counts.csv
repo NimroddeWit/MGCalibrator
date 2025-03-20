@@ -1,0 +1,5 @@
+sample_id,taxa_1,taxa_2,taxa_3,taxa_4
+sample_1,0,5,2,1
+sample_2,2,0,10,5
+sample_3,100,4,0,3
+sample_4,1200,4,6,60

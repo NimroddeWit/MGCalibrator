@@ -1,25 +1,35 @@
-# Set the minimum required version of cmake for the project.
+# Set the minimum required version of CMake
 cmake_minimum_required(VERSION 3.10)
 
-# Define the project name and optionally include the version and description here
+# Define the project
 project(Absolutifier VERSION 1.0 DESCRIPTION "Absolute quantification of shotgun sequencing data")
 
-# Specify the C++ standard
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED True)
+# Require C++20 (SeqAn3 requires it)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Set binary output directory to bin within the project folder
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/../bin)
+# Set binary output directory
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/..)
 
-# Add executable target with source files
-add_executable(Absolutifier src/main.cpp src/count_fastq_bases.cpp src/read_metadata.cpp)
+# Include directories
+include_directories(external/seqan3/include include)
 
-# Include directories, modify this if there are any header files in a separate include directory
-include_directories(include)
+# Add SeqAn3 as a subdirectory (since we manually cloned it)
+add_subdirectory(external/seqan3)
 
-# If there are any libraries that need to be linked, find them and link them here
-# find_package(SomeLibrary REQUIRED)
-# target_link_libraries(Absolutifier PRIVATE ${SomeLibrary_LIBRARIES})
+# Source files
+set(SOURCES
+    src/main.cpp
+    src/count_bases.cpp
+    src/read_metadata.cpp
+    src/io_matrix.cpp
+)
 
-# Set up installation rules. The install command needs to specify the target and destination.
-install(TARGETS Absolutifier DESTINATION bin)
+# Create executable
+add_executable(Absolutifier ${SOURCES})
+
+# Link with SeqAn3
+target_link_libraries(Absolutifier PRIVATE seqan3::seqan3)
+
+# Print where the executable will be created
+message(STATUS "Executable will be created in: ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
