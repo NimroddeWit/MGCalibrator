@@ -1,5 +1,8 @@
 #include "io_matrix.hpp"
 
+#include "io_matrix.hpp"
+#include <unordered_set>
+
 std::pair<std::vector<std::string>, std::unordered_map<std::string, std::vector<double>>> 
 read_matrix(const std::string& filePath) {
     std::ifstream file(filePath);
@@ -9,6 +12,8 @@ read_matrix(const std::string& filePath) {
 
     std::vector<std::string> taxa_names;
     std::unordered_map<std::string, std::vector<double>> matrix_data;
+    std::unordered_set<std::string> seen_taxa;
+    std::unordered_set<std::string> seen_samples;
 
     std::string line;
     bool first_row = true;
@@ -24,6 +29,9 @@ read_matrix(const std::string& filePath) {
             // ✅ Read header (Extract taxa names, skipping first column)
             getline(lineStream, token, ',');  // Skip "sample_id"
             while (getline(lineStream, token, ',')) {
+                if (!seen_taxa.insert(token).second) {
+                    throw std::runtime_error("❌ Error: Duplicate taxa name found in header: " + token);
+                }
                 taxa_names.push_back(token);
             }
             expected_columns = taxa_names.size();
@@ -32,6 +40,10 @@ read_matrix(const std::string& filePath) {
             // ✅ Read sample_id and taxa abundances
             std::string sample_id;
             getline(lineStream, sample_id, ',');
+
+            if (!seen_samples.insert(sample_id).second) {
+                throw std::runtime_error("❌ Error: Duplicate sample_id found in matrix: " + sample_id);
+            }
 
             std::vector<double> abundances;
             while (getline(lineStream, token, ',')) {

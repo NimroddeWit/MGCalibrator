@@ -6,6 +6,7 @@
 #include <iostream>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <stdexcept>
 
 // Function to read a matrix from a CSV file

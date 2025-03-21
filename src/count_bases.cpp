@@ -46,26 +46,33 @@ std::array<size_t, seqan3::dna5::alphabet_size> count_bases_PE(const std::string
 }
 
 // 🔹 **Process ALL SINGLE-END FASTQ/FASTA FILES in a folder**
-std::vector<std::pair<std::string, std::array<size_t, 5>>> count_bases_SE_from_folder(
-    const std::string& directory, const std::string& extension) {
+std::vector<std::pair<std::string, std::array<size_t, 5>>> count_bases_SE_from_folder(const std::string& directory, const std::string& extension) {
     
     std::vector<std::pair<std::string, std::array<size_t, 5>>> sample_nucleotide_counts;
-    
+    std::unordered_set<std::string> sample_names;
+
     for (const auto& entry : std::filesystem::directory_iterator(directory)) {
         std::string ext = entry.path().extension().string();
         if (ext == extension || ext == (extension + ".gz")) {
+            std::string sample_name = entry.path().stem().string();
+            if (!sample_names.insert(sample_name).second) {
+                throw std::runtime_error("❌ Duplicate sample name detected: " + sample_name);
+            }
+
             std::array<size_t, 5> counts = count_bases_SE(entry.path().string());
-            sample_nucleotide_counts.push_back({entry.path().stem().string(), counts});
+            sample_nucleotide_counts.emplace_back(sample_name, counts);
         }
     }
-    
+
     return sample_nucleotide_counts;
 }
 
 // 🔹 **Process ALL PAIRED-END FASTQ FILES in a folder**
 std::vector<std::pair<std::string, std::array<size_t, 5>>> count_bases_PE_from_folder(
-    const std::string& directory, const std::string& extension, const std::vector<std::string>& suffixes) {
-    
+    const std::string& directory,
+    const std::string& extension,
+    const std::vector<std::string>& suffixes)
+{
     std::vector<std::pair<std::string, std::array<size_t, 5>>> sample_nucleotide_counts;
     std::unordered_map<std::string, std::string> r1_files;
     std::unordered_map<std::string, std::string> r2_files;
@@ -76,26 +83,38 @@ std::vector<std::pair<std::string, std::array<size_t, 5>>> count_bases_PE_from_f
         std::string ext = entry.path().extension().string();
 
         if (ext == extension || ext == (extension + ".gz")) {
-            if (filename.ends_with(suffixes[0])) {
+            if (filename.size() >= suffixes[0].size() &&
+                filename.compare(filename.size() - suffixes[0].size(), suffixes[0].size(), suffixes[0]) == 0)
+            {
                 std::string base_name = filename.substr(0, filename.size() - suffixes[0].size());
                 r1_files[base_name] = entry.path().string();
             }
-            else if (filename.ends_with(suffixes[1])) {
+            else if (filename.size() >= suffixes[1].size() &&
+                     filename.compare(filename.size() - suffixes[1].size(), suffixes[1].size(), suffixes[1]) == 0)
+            {
                 std::string base_name = filename.substr(0, filename.size() - suffixes[1].size());
                 r2_files[base_name] = entry.path().string();
             }
         }
     }
 
-    // ✅ Process only **paired** R1 & R2 files
+    // ✅ Process only paired R1 & R2 files
     for (const auto& [base_name, r1_file] : r1_files) {
-        if (r2_files.find(base_name) != r2_files.end()) {
+        if (r2_files.contains(base_name)) {
             std::array<size_t, 5> counts = count_bases_PE(r1_file, r2_files[base_name]);
-            sample_nucleotide_counts.push_back({base_name, counts});
+            sample_nucleotide_counts.emplace_back(base_name, counts);
         } else {
-            std::cerr << "Warning: Missing paired file for " << r1_file << "\n";
+            std::cerr << "⚠️ Warning: Missing paired file for base name: " << base_name << "\n";
         }
     }
-    
+
+    // ✅ Check for duplicate sample names
+    std::unordered_set<std::string> sample_names;
+    for (const auto& [sample, _] : sample_nucleotide_counts) {
+        if (!sample_names.insert(sample).second) {
+            throw std::runtime_error("❌ Error: Duplicate sample name found: " + sample);
+        }
+    }
+
     return sample_nucleotide_counts;
 }

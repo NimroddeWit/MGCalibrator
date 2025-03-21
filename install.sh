@@ -14,7 +14,7 @@ mkdir -p "$BUILD_DIR"
 echo "Configuring and building the project..."
 cd "$BUILD_DIR"
 cmake ..                   # Configure the project
-make                       # Build the project
+make -s                    # Build the project
 
 # Step 3: Optionally install the project
 echo "Installation Step: You might need administrative privileges for this step."

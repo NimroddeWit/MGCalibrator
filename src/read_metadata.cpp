@@ -15,8 +15,8 @@ std::unordered_map<std::string, double> read_metadata(const std::string& filePat
 
     std::istringstream headerStream(header);
     if (!(std::getline(headerStream, col1, ',') && std::getline(headerStream, col2, ',')) ||
-        col1 != "sample_id" || col2 != "DNA_prop") {
-        throw std::runtime_error("❌ Error: Invalid header in file: " + filePath + ". Expected: 'sample_id,DNA_prop'");
+        col1 != "sample_id" || col2 != "DNA_conc") {
+        throw std::runtime_error("❌ Error: Invalid header in file: " + filePath + ". Expected: 'sample_id,DNA_conc'");
     }
 
     std::string line;
@@ -30,16 +30,14 @@ std::unordered_map<std::string, double> read_metadata(const std::string& filePat
             continue;
         }
 
-        if (concentration < 0.0 || concentration > 1.0) {
-            std::cerr << "⚠️ Warning: DNA concentration out of range [0,1] in " << filePath << " -> "
+        if (concentration < 0.0) {
+            std::cerr << "⚠️ Warning: DNA concentration cannot be negative in " << filePath << " -> "
                       << sample_id << ": " << concentration << std::endl;
             continue;
         }
 
         if (metadata.find(sample_id) != metadata.end()) {
-            std::cerr << "⚠️ Warning: Duplicate entry found for sample_id: " << sample_id << " in " << filePath
-                      << ". Keeping the first occurrence." << std::endl;
-            continue;
+            throw std::runtime_error("❌ Error: Duplicate sample_id '" + sample_id + "' found in metadata file: " + filePath);
         }
 
         metadata[sample_id] = concentration;

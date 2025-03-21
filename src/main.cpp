@@ -1,19 +1,20 @@
 #include <iostream>
 #include <vector>
 #include <unordered_map>
+#include <set> 
 #include "count_bases.hpp"
 #include "read_metadata.hpp"
 #include "io_matrix.hpp"
 
 void printHelp(const char* programName) {
     std::cout << "Usage: " << programName << " [options]\n"
-              << "  --metagenomes <path>     Path to metagenomes directory\n"
+              << "  --metagenomes <path>     Path to metagenomes directory (required)\n"
               << "  --extension <ext>        File extension (default: .fastq)\n"
-              << "  --suffixes <R1,R2>       Paired-end suffixes (e.g., _R1,_R2)\n"
-              << "  --meta <file>            Metadata file path\n"
-              << "  --counts <file>          Counts matrix file path\n"
-              << "  --output <file>          Output file for absolute quantification\n"
-              << "  --volume <mL>            Processed volume in uL (default: 500 umL)\n"
+              << "  --suffixes <s1,s2>       Paired-end suffixes, e.g., _R1,_R2. If omitted, samples are treated as single-end.\n"
+              << "  --meta <file>            Metadata file path - Contains 'sample_id' and 'DNA_conc' in ng/μL (required)\n"
+              << "  --counts <file>          Counts matrix file path (required)\n"
+              << "  --output <file>          Output file for absolute quantification (required)\n"
+              << "  --volume <μL>            Processed volume in μL (required)\n"
               << "  --help                   Display this help and exit\n";
 }
 
@@ -27,7 +28,7 @@ int main(int argc, char* argv[]) {
     std::string file_extension = ".fastq"; 
     std::string metagenomes_dir, metadata_file, counts_file, output_file;
     std::vector<std::string> suffixes;
-    double PROCESSED_VOLUME_mL = 500;  // Default: 500 mL 
+    double processed_volume_uL = -1;
 
     // 🔹 Parse command-line arguments
     for (int i = 1; i < argc; i++) {
@@ -52,7 +53,11 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--output" && i + 1 < argc) {
             output_file = argv[++i];
         } else if (arg == "--volume" && i + 1 < argc) {
-            PROCESSED_VOLUME_mL = std::stod(argv[++i]);
+            processed_volume_uL = std::stod(argv[++i]);
+            if (processed_volume_uL <= 0) {
+                std::cerr << "❌ Error: --volume must be greater than 0 μL.\n";
+                return 1;
+            }
         } else {
             std::cerr << "❌ Invalid option: " << arg << std::endl;
             printHelp(argv[0]);
@@ -60,9 +65,8 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // 🔹 Ensure required parameters are provided
-    if (metagenomes_dir.empty() || metadata_file.empty() || counts_file.empty() || output_file.empty()) {
-        std::cerr << "❌ Error: --metagenomes, --meta, --counts, and --output are REQUIRED.\n";
+    if (metagenomes_dir.empty() || metadata_file.empty() || counts_file.empty() || output_file.empty() || processed_volume_uL == -1) {
+        std::cerr << "❌ Error: --metagenomes, --meta, --counts, --output, and --volume are REQUIRED.\n";
         printHelp(argv[0]);
         return 1;
     }
@@ -91,32 +95,46 @@ int main(int argc, char* argv[]) {
         ? count_bases_SE_from_folder(metagenomes_dir, file_extension)
         : count_bases_PE_from_folder(metagenomes_dir, file_extension, suffixes);
 
+      // 🔍 Check sample ID consistency across all data sources
+      std::set<std::string> base_ids, meta_ids, count_ids;
+      for (const auto& [id, _] : sample_nucleotide_counts) base_ids.insert(id);
+      for (const auto& [id, _] : metadata) meta_ids.insert(id);
+      for (const auto& [id, _] : counts_matrix) count_ids.insert(id);
+  
+      if (base_ids != meta_ids || base_ids != count_ids) {
+        std::cerr << "❌ Error: Sample IDs do not match across metagenomes, metadata, and counts. "
+                  << "(Did you set --suffixes for paired-end metagenomes?)\n";
+        return 1;
+    }
+
     // 🔹 Calculate absolute quantification
     std::unordered_map<std::string, std::vector<double>> absolute_quantification;
+
     for (const auto& [sample_name, counts] : sample_nucleotide_counts) {
-        if (metadata.find(sample_name) == metadata.end()) {
-            std::cerr << "❌ Error: Missing metadata for sample " << sample_name << "\n";
-            return 1;
-        }
 
-        // Compute total DNA mass (grams) for the sample
-        const double PROCESSED_VOLUME_UL = PROCESSED_VOLUME_mL * 1000;
-        double sampleDNA_g = metadata[sample_name] * PROCESSED_VOLUME_UL * 1e-9;
+        // 1. 📦 DNA mass extracted from sample (in grams)
+        // DNA_conc is in ng/µL, volume is in µL -> total DNA in ng -> convert to grams (×1e-9)
+        double extracted_mass_g = metadata[sample_name] * processed_volume_uL * 1e-9;
 
-        // Compute total base pairs
-        double total_weight = (counts[0] * 313.2) + (counts[1] * 289.2) +
-                              (counts[2] * 329.2) + (counts[3] * 304.2) + 79.0;
-        double sampleDNA_bp = sampleDNA_g / (total_weight / (counts[0] + counts[1] + counts[2] + counts[3]));
+        // 2. Total weight of sequenced DNA in daltons
+        double sequenced_mass_daltons =
+        (counts[0] * 313.2) +
+        (counts[1] * 289.2) +
+        (counts[2] * 329.2) +
+        (counts[3] * 304.2) + 79.0;
 
-        // Compute fraction sequenced
-        double seqDNA_bp = counts_matrix[sample_name][0];  // Total sequenced DNA
-        double fraction_sequenced = seqDNA_bp / sampleDNA_bp;
+        // 3. Convert to grams
+        double sequenced_mass_g = sequenced_mass_daltons * 1.66054e-24;
 
-        // Compute absolute quantification for each taxon
+        // 4. Compute ratio
+        double ratio = sequenced_mass_g / extracted_mass_g;
+
+        // 5. Scale each count by the inverse of the ratio
         std::vector<double> absolute_counts;
-        for (double basepair : counts_matrix[sample_name]) {
-            absolute_counts.push_back(basepair / fraction_sequenced);
+        for (double abun : counts_matrix[sample_name]) {
+            absolute_counts.push_back(abun / ratio);  
         }
+
         absolute_quantification[sample_name] = absolute_counts;
     }
 

@@ -7,6 +7,7 @@
 #include <string>
 #include <filesystem>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <seqan3/io/sequence_file/input.hpp>
 #include <seqan3/alphabet/nucleotide/dna5.hpp>
