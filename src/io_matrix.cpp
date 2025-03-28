@@ -1,23 +1,19 @@
 #include "io_matrix.hpp"
 
-#include "io_matrix.hpp"
-#include <unordered_set>
-
-std::pair<std::vector<std::string>, std::unordered_map<std::string, std::vector<double>>> 
-read_matrix(const std::string& filePath) {
+// ✅ Read matrix file into a Matrix struct (preserves sample order)
+Matrix read_matrix(const std::string& filePath) {
     std::ifstream file(filePath);
     if (!file.is_open()) {
         throw std::runtime_error("❌ Error: Failed to open matrix file: " + filePath);
     }
 
-    std::vector<std::string> taxa_names;
-    std::unordered_map<std::string, std::vector<double>> matrix_data;
+    Matrix matrix;
     std::unordered_set<std::string> seen_taxa;
     std::unordered_set<std::string> seen_samples;
 
     std::string line;
     bool first_row = true;
-    size_t expected_columns = 0;  // Track number of columns
+    size_t expected_columns = 0;
 
     std::cout << "📂 Reading matrix file: " << filePath << "\n";
 
@@ -26,57 +22,55 @@ read_matrix(const std::string& filePath) {
         std::string token;
 
         if (first_row) {
-            // ✅ Read header (Extract taxa names, skipping first column)
-            getline(lineStream, token, ',');  // Skip "sample_id"
+            getline(lineStream, token, ',');  // skip "sample_id"
             while (getline(lineStream, token, ',')) {
                 if (!seen_taxa.insert(token).second) {
-                    throw std::runtime_error("❌ Error: Duplicate taxa name found in header: " + token);
+                    throw std::runtime_error("❌ Error: Duplicate taxa name in header: " + token);
                 }
-                taxa_names.push_back(token);
+                matrix.taxa_names.push_back(token);
             }
-            expected_columns = taxa_names.size();
+            expected_columns = matrix.taxa_names.size();
             first_row = false;
         } else {
-            // ✅ Read sample_id and taxa abundances
             std::string sample_id;
             getline(lineStream, sample_id, ',');
 
             if (!seen_samples.insert(sample_id).second) {
-                throw std::runtime_error("❌ Error: Duplicate sample_id found in matrix: " + sample_id);
+                throw std::runtime_error("❌ Error: Duplicate sample_id: " + sample_id);
             }
 
+            matrix.sample_order.push_back(sample_id);
             std::vector<double> abundances;
             while (getline(lineStream, token, ',')) {
                 try {
-                    abundances.push_back(std::stod(token));  // Convert to double
-                } catch (const std::exception &e) {
-                    throw std::runtime_error("❌ Error: Invalid numeric value in " + filePath + " at sample: " + sample_id);
+                    double value = std::stod(token);
+                    if (value < 0) {
+                        throw std::runtime_error("❌ Error: Negative abundance value in " + filePath + " at sample: " + sample_id);
+                    }
+                    abundances.push_back(value);
+                } catch (...) {
+                    throw std::runtime_error("❌ Error: Invalid numeric in " + filePath + " at sample: " + sample_id);
                 }
             }
 
-            // ✅ Validate row consistency
             if (abundances.size() != expected_columns) {
-                throw std::runtime_error("❌ Error: Mismatched column count in " + filePath + " at sample: " + sample_id);
+                throw std::runtime_error("❌ Error: Column count mismatch at sample: " + sample_id);
             }
 
-            // ✅ Store in matrix
-            matrix_data[sample_id] = abundances;
+            matrix.data[sample_id] = abundances;
         }
     }
 
-    if (matrix_data.empty()) {
-        throw std::runtime_error("❌ Error: No valid matrix data found in file: " + filePath);
+    if (matrix.data.empty()) {
+        throw std::runtime_error("❌ Error: No matrix data found in file: " + filePath);
     }
 
     std::cout << "✅ Matrix file successfully loaded: " << filePath << "\n";
-    return {taxa_names, matrix_data};
+    return matrix;
 }
 
-void write_matrix(
-    const std::string& output_file,
-    const std::vector<std::string>& taxa_names,
-    const std::unordered_map<std::string, std::vector<double>>& absolute_matrix
-) {
+// ✅ Write matrix from Matrix struct (preserves sample order)
+void write_matrix(const std::string& output_file, const Matrix& matrix) {
     std::ofstream outFile(output_file);
     if (!outFile.is_open()) {
         std::cerr << "❌ Error: Could not open output file: " << output_file << "\n";
@@ -85,17 +79,15 @@ void write_matrix(
 
     std::cout << "📝 Writing matrix to: " << output_file << "\n";
 
-    // ✅ Write header row (Sample ID + Taxa Names)
     outFile << "sample_id";
-    for (const auto& taxa : taxa_names) {
+    for (const auto& taxa : matrix.taxa_names) {
         outFile << "," << taxa;
     }
     outFile << "\n";
 
-    // ✅ Write data rows
-    for (const auto& [sample_name, abundances] : absolute_matrix) {
-        outFile << sample_name;
-        for (double value : abundances) {
+    for (const auto& sample : matrix.sample_order) {
+        outFile << sample;
+        for (double value : matrix.data.at(sample)) {
             outFile << "," << value;
         }
         outFile << "\n";

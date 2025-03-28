@@ -1,27 +1,24 @@
 #include "count_bases.hpp"
 
-// 🔹 **Count bases in a SINGLE-END FASTQ/FASTA file**
-std::array<size_t, seqan3::dna5::alphabet_size> count_bases_SE(const std::string& filePath) {
-    std::array<size_t, seqan3::dna5::alphabet_size> nucleotide_counts{}; 
-
+// 🔹 Count total bases in a SINGLE-END FASTQ/FASTA file
+// 📄 Each base is counted from the input file regardless of nucleotide type
+std::uint64_t count_total_bases_SE(const std::string& filePath) {
+    std::uint64_t total = 0;
     try {
         seqan3::sequence_file_input file{filePath};
         for (auto &record : file) {
-            for (seqan3::dna5 symbol : record.sequence()) {
-                ++nucleotide_counts[symbol.to_rank()];
-            }
+            total += record.sequence().size();
         }
     } catch (const std::exception &e) {
-        std::cerr << "Error reading file " << filePath << ": " << e.what() << std::endl;
+        std::cerr << "❌ Error reading file " << filePath << ": " << e.what() << std::endl;
     }
-
-    return nucleotide_counts;
+    return total;
 }
 
-// 🔹 **Count bases in a PAIRED-END FASTQ file**
-std::array<size_t, seqan3::dna5::alphabet_size> count_bases_PE(const std::string& file1, const std::string& file2) {
-    std::array<size_t, seqan3::dna5::alphabet_size> combined_counts{}; 
-
+// 🔹 Count total bases in a PAIRED-END FASTQ file
+// 📄 Counts total number of bases from both R1 and R2 reads
+std::uint64_t count_total_bases_PE(const std::string& file1, const std::string& file2) {
+    std::uint64_t total = 0;
     try {
         seqan3::sequence_file_input fin1{file1};
         seqan3::sequence_file_input fin2{file2};
@@ -30,91 +27,63 @@ std::array<size_t, seqan3::dna5::alphabet_size> count_bases_PE(const std::string
             if (rec1.id() != rec2.id()) {
                 throw std::runtime_error("Mismatched paired-end reads in: " + file1 + " and " + file2);
             }
-
-            for (seqan3::dna5 symbol : rec1.sequence()) {
-                ++combined_counts[symbol.to_rank()];
-            }
-            for (seqan3::dna5 symbol : rec2.sequence()) {
-                ++combined_counts[symbol.to_rank()];
-            }
+            total += rec1.sequence().size();
+            total += rec2.sequence().size();
         }
     } catch (const std::exception &e) {
-        std::cerr << "Error processing paired-end files: " << e.what() << std::endl;
+        std::cerr << "❌ Error processing paired-end files: " << e.what() << std::endl;
     }
-
-    return combined_counts;
+    return total;
 }
 
-// 🔹 **Process ALL SINGLE-END FASTQ/FASTA FILES in a folder**
-std::vector<std::pair<std::string, std::array<size_t, 5>>> count_bases_SE_from_folder(const std::string& directory, const std::string& extension) {
-    
-    std::vector<std::pair<std::string, std::array<size_t, 5>>> sample_nucleotide_counts;
-    std::unordered_set<std::string> sample_names;
+// 🔹 Process ALL SINGLE-END FASTQ/FASTA FILES in a folder
+// 📁 Iterates over all single-end files and sums total base counts
+std::unordered_map<std::string, std::uint64_t> count_total_bases_SE_from_folder(const std::string& directory, const std::string& extension) {
+    std::unordered_map<std::string, std::uint64_t> sample_counts;
 
     for (const auto& entry : std::filesystem::directory_iterator(directory)) {
         std::string ext = entry.path().extension().string();
         if (ext == extension || ext == (extension + ".gz")) {
             std::string sample_name = entry.path().stem().string();
-            if (!sample_names.insert(sample_name).second) {
-                throw std::runtime_error("❌ Duplicate sample name detected: " + sample_name);
-            }
-
-            std::array<size_t, 5> counts = count_bases_SE(entry.path().string());
-            sample_nucleotide_counts.emplace_back(sample_name, counts);
+            std::uint64_t count = count_total_bases_SE(entry.path().string());
+            sample_counts[sample_name] = count;
         }
     }
-
-    return sample_nucleotide_counts;
+    return sample_counts;
 }
 
-// 🔹 **Process ALL PAIRED-END FASTQ FILES in a folder**
-std::vector<std::pair<std::string, std::array<size_t, 5>>> count_bases_PE_from_folder(
+// 🔹 Process ALL PAIRED-END FASTQ FILES in a folder
+// 📁 Matches R1 and R2 files based on suffixes and processes them
+std::unordered_map<std::string, std::uint64_t> count_total_bases_PE_from_folder(
     const std::string& directory,
     const std::string& extension,
-    const std::vector<std::string>& suffixes)
-{
-    std::vector<std::pair<std::string, std::array<size_t, 5>>> sample_nucleotide_counts;
+    const std::vector<std::string>& suffixes) {
+
+    std::unordered_map<std::string, std::uint64_t> sample_counts;
     std::unordered_map<std::string, std::string> r1_files;
     std::unordered_map<std::string, std::string> r2_files;
 
-    // 📂 Scan directory to find `_R1` and `_R2` files
     for (const auto& entry : std::filesystem::directory_iterator(directory)) {
         std::string filename = entry.path().stem().string();
         std::string ext = entry.path().extension().string();
 
         if (ext == extension || ext == (extension + ".gz")) {
-            if (filename.size() >= suffixes[0].size() &&
-                filename.compare(filename.size() - suffixes[0].size(), suffixes[0].size(), suffixes[0]) == 0)
-            {
+            if (filename.ends_with(suffixes[0])) {
                 std::string base_name = filename.substr(0, filename.size() - suffixes[0].size());
                 r1_files[base_name] = entry.path().string();
-            }
-            else if (filename.size() >= suffixes[1].size() &&
-                     filename.compare(filename.size() - suffixes[1].size(), suffixes[1].size(), suffixes[1]) == 0)
-            {
+            } else if (filename.ends_with(suffixes[1])) {
                 std::string base_name = filename.substr(0, filename.size() - suffixes[1].size());
                 r2_files[base_name] = entry.path().string();
             }
         }
     }
 
-    // ✅ Process only paired R1 & R2 files
-    for (const auto& [base_name, r1_file] : r1_files) {
+    for (const auto& [base_name, r1_path] : r1_files) {
         if (r2_files.contains(base_name)) {
-            std::array<size_t, 5> counts = count_bases_PE(r1_file, r2_files[base_name]);
-            sample_nucleotide_counts.emplace_back(base_name, counts);
-        } else {
-            std::cerr << "⚠️ Warning: Missing paired file for base name: " << base_name << "\n";
+            std::uint64_t count = count_total_bases_PE(r1_path, r2_files[base_name]);
+            sample_counts[base_name] = count;
         }
     }
 
-    // ✅ Check for duplicate sample names
-    std::unordered_set<std::string> sample_names;
-    for (const auto& [sample, _] : sample_nucleotide_counts) {
-        if (!sample_names.insert(sample).second) {
-            throw std::runtime_error("❌ Error: Duplicate sample name found: " + sample);
-        }
-    }
-
-    return sample_nucleotide_counts;
+    return sample_counts;
 }
