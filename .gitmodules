@@ -1,3 +1,0 @@
-[submodule "external/seqan3"]
-	path = external/seqan3
-	url = https://github.com/seqan/seqan3.git

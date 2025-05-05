@@ -1,67 +1,86 @@
-# Absolutifier
+# Absolutifier (Python Version)
 
-Absolutifier is a command-line tool designed to compute absolute quantification from metagenomic sequencing data.  
-It processes large-scale paired-end or single-end FASTQ files, combines them with relative abundance matrices and sample metadata (e.g., DNA concentration), and returns an **absolute abundance matrix** for downstream analyses.
+Absolutifier is a Python-based command-line tool that computes **absolute quantification** from metagenomic data.
+It combines relative abundance matrices (from reads or contigs), metadata (e.g., DNA concentration), and a fixed volume to return an **absolute abundance matrix** for downstream analysis.
 
 ---
 
 ## 📦 Installation
 
-To install Absolutifier, first clone the repository **with submodules**, then run the installation script:
+Clone or download the repository and install it using pip:
 
 ```bash
-git clone --recurse-submodules https://github.com/Fuschi/Absolutifier.git
-cd Absolutifier
-./install
+pip install .
 ```
 
-> 🔧 The `install` script will automatically build the project and its dependencies.  
-> Make sure you have a C++20-compatible compiler and CMake installed.
+Optionally, use a virtual environment:
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install .
+```
 
 ---
 
 ## ▶️ Example Usage
 
-To run Absolutifier on a dataset of paired-end metagenomes:
+Run Absolutifier with:
 
 ```bash
-./absolutifier \
-  --metagenomes data/PE_fastq/ \
-  --suffixes _R1,_R2 \
-  --extension .fastq \
+absolutifier \
   --counts data/PE_fastq/counts.csv \
   --meta data/PE_fastq/metadata.csv \
-  --volume 5000000 \
-  --output test \
-  --debug
+  --output output_pe_absolute.csv \
+  --volume 500 \
+  --fastq_folder data/PE_fastq \
+  --suffixes _R1 _R2 \
+  --extension .fastq
 ```
 
-### Explanation of parameters
+### Explanation of Parameters
 
-| **Flag**          | **Description**                                                               |
-|------------------|-------------------------------------------------------------------------------|
-| `--metagenomes`  | Path to the directory containing FASTQ/FASTA files                            |
-| `--suffixes`     | Comma-separated suffixes for paired-end reads (e.g., `_R1,_R2`)               |
-| `--extension`    | File extension used for input files (e.g., `.fastq`, `.fq`, `.fasta`)         |
-| `--counts`       | CSV file containing the abundance matrix per sample              |
-| `--meta`         | CSV file with metadata including sample IDs and DNA concentrations            |
-| `--volume`       | Processed volume per sample (in μL)                                           |
-| `--output`       | Output file path where absolute counts will be saved                          |
-| `--debug`        | *(Optional)* Enables verbose logging and saves intermediate debug files       |
-
----
-
-## 🐞 Debug Mode
-
-When `--debug` is enabled, the program generates intermediate files in a `debug/` folder, including:
-
-- `abundance_matrix_debug.csv`
-- `metadata_debug.csv`
-- `base_counts_debug.csv`
-- `fraction_sequenced_debug.csv`
-
-These help with transparency and validation of each step in the quantification process.
+| **Flag**         | **Description**                                                                 |
+|------------------|---------------------------------------------------------------------------------|
+| `--counts`       | CSV file with **sample rows** and **taxa columns** (e.g., `sample_id,taxa_1,...`) |
+| `--meta`         | CSV file with `sample_id` and `DNA_conc` columns                               |
+| `--volume`       | Fixed DNA volume (µL) to apply to all samples                                  |
+| `--output`       | Output CSV file with absolute abundances                                       |
+| `--fastq_folder` | *(Optional)* Folder with FASTQ/FASTA files                                     |
+| `--suffixes`     | *(Optional)* List of suffixes for filtering file names (e.g., `_R1 _R2`)       |
+| `--extension`    | *(Optional)* File extension (default: `.fastq`)                                |
+| `--singleton`    | *(Optional)* Additional single FASTQ file(s) to include                        |
 
 ---
 
-Feel free to open issues or contribute to development! 
+## 🧪 Input Format Example
+
+**counts.csv**:
+
+```csv
+sample_id,taxa_1,taxa_2,taxa_3
+sample_1,0,5,2
+sample_2,2,0,10
+sample_3,100,4,0
+```
+
+**metadata.csv**:
+
+```csv
+sample_id,DNA_conc
+sample_1,22.5
+sample_2,31.1
+sample_3,29.3
+```
+
+---
+
+## 🛠 Features in Development
+
+- Base count summaries from FASTQ files
+- Sample-wise normalization reports
+- Optional debug outputs
+
+---
+
+Feel free to open issues or contribute to development!
