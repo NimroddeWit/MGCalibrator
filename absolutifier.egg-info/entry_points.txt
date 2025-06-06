@@ -1,0 +1,2 @@
+[console_scripts]
+absolutifier = absolutifier.cli:main
