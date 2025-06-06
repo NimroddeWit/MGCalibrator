@@ -3,6 +3,8 @@
 Absolutifier is a Python-based command-line tool that computes **absolute quantification** from metagenomic data.
 It combines relative abundance matrices (from reads or contigs), metadata (e.g., DNA concentration), and a fixed volume to return an **absolute abundance matrix** for downstream analysis.
 
+Works with any type of biological features: **taxa, genes, functional categories, etc.**
+
 ---
 
 ## 📦 Installation
@@ -42,9 +44,9 @@ absolutifier \
 
 | **Flag**         | **Description**                                                                 |
 |------------------|---------------------------------------------------------------------------------|
-| `--counts`       | CSV file with **sample rows** and **taxa columns** (e.g., `sample_id,taxa_1,...`) |
+| `--counts`       | CSV file with **sample rows** and **feature columns** (e.g., `sample_id,feature_1,...`) |
 | `--meta`         | CSV file with `sample_id` and `DNA_conc` columns                               |
-| `--volume`       | Fixed DNA volume (µL) to apply to all samples                                  |
+| `--volume`       | Fixed DNA volume (microL) to apply to all samples                              |
 | `--output`       | Output CSV file with absolute abundances                                       |
 | `--fastq_folder` | *(Optional)* Folder with FASTQ/FASTA files                                     |
 | `--suffixes`     | *(Optional)* List of suffixes for filtering file names (e.g., `_R1 _R2`)       |
@@ -58,7 +60,7 @@ absolutifier \
 **counts.csv**:
 
 ```csv
-sample_id,taxa_1,taxa_2,taxa_3
+sample_id,feature_1,feature_2,feature_3
 sample_1,0,5,2
 sample_2,2,0,10
 sample_3,100,4,0

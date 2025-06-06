@@ -5,4 +5,6 @@ License-File: LICENSE
 Requires-Dist: biopython
 Requires-Dist: pandas
 Requires-Dist: numpy
+Requires-Dist: matplotlib
+Requires-Dist: seaborn
 Dynamic: requires-dist
