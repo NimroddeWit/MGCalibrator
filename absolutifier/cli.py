@@ -23,14 +23,8 @@ def main():
                        help="Calculate 95% confidence intervals using Monte Carlo sampling")
     parser.add_argument("--mc_samples", type=int, default=1000, 
                        help="Number of Monte Carlo samples for confidence intervals (default: 1000)")
-    parser.add_argument("--zero_method", choices=["CZM", "Dirichlet"], default="CZM",
-                       help="Zero replacement method: CZM or Dirichlet (default: CZM)")
     parser.add_argument("--zero_alpha", type=float, default=0.5,
-                       help="Alpha parameter for zero replacement (default: 0.5)")
-    parser.add_argument("--threshold", type=float, default=0.5,
-                       help="Upper limit threshold for CZM method (default: 0.5)")
-    parser.add_argument("--frac", type=float, default=0.65,
-                       help="Fraction of threshold for CZM imputation (default: 0.65)")
+                       help="Dirichlet prior for Bayesian error model (default: 0.5)")
     
     # Plotting options
     parser.add_argument("--plot", action="store_true",
@@ -65,15 +59,12 @@ def main():
     if args.error_bars:
         print(f"Calculating 95% confidence intervals with {args.mc_samples} Monte Carlo samples...")
         print(f"Using statistically robust approach with scaling factor error propagation...")
-        print(f"Zero replacement method: {args.zero_method}")
+        print(f"Using Dirichlet prior with alpha={args.zero_alpha}")
         
         absolute, lower_ci, upper_ci, zero_replaced, scaling_factors = compute_absolute_abundance_with_error(
             counts, dna_conc, volume, fastq_files,
             n_monte_carlo=args.mc_samples,
-            zero_replacement_method=args.zero_method,
-            zero_replacement_alpha=args.zero_alpha,
-            threshold=args.threshold,
-            frac=args.frac
+            zero_replacement_alpha=args.zero_alpha
         )
         
         # Create consolidated output with all information including zero-replaced counts and scaling factors
