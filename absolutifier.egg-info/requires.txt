@@ -1,5 +1,0 @@
-biopython
-pandas
-numpy
-matplotlib
-seaborn
