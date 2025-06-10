@@ -127,15 +127,15 @@ def compute_absolute_abundance_with_error(counts_df, dna_conc, volume, fastq_fil
         # Posterior is Dirichlet(counts + prior)
         dirichlet_params = sample_counts + prior
 
-        # Generate Monte Carlo samples from the posterior distribution
-        # This is a vectorized way to sample from a dirichlet distribution `n_monte_carlo` times
+        #Monte Carlo samples from the posterior distribution
+        #sample from a dirichlet distribution `n_monte_carlo` times
         sampled_proportions = np.random.dirichlet(dirichlet_params, size=n_monte_carlo)
 
         # For each set of proportions, sample from a multinomial to get counts
-        # This adds the sampling noise from the sequencing process
+        #adds the sampling noise from the sequencing process
         sampled_counts = np.array([np.random.multinomial(int(total_counts), p) for p in sampled_proportions])
 
-        # CRITICAL: Apply scaling factor to get absolute abundance
+        #Apply scaling factor to get absolute abundance
         sampled_absolute = sampled_counts * scaling_factor
         mc_results[:, :, sample_idx] = sampled_absolute.T
 
