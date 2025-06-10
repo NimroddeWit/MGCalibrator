@@ -149,7 +149,7 @@ def compute_absolute_abundance_with_error(counts_df, dna_conc, volume, fastq_fil
     lower_ci = pd.DataFrame(lower_ci_values, index=counts_df.index, columns=counts_df.columns)
     upper_ci = pd.DataFrame(upper_ci_values, index=counts_df.index, columns=counts_df.columns)
 
-    # For transparency, provide the posterior mean of the counts
+    # provide the posterior mean of the counts
     # This can be seen as the "zero-replaced" or "denoised" counts.
     posterior_mean_counts_matrix = np.zeros_like(counts_matrix)
     for sample_idx, sample in enumerate(counts_df.columns):
