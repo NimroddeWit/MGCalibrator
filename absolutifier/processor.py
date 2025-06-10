@@ -41,7 +41,7 @@ def compute_absolute_abundance(counts_df, dna_conc, volume, fastq_files):
 
 def compute_absolute_abundance_with_error(counts_df, dna_conc, volume, fastq_files,
                                         n_monte_carlo=1000,
-                                        zero_replacement_alpha=0.5):
+                                        alpha=0.5):
     """
     Compute absolute abundance with 95% confidence intervals using a Bayesian approach.
 
@@ -73,7 +73,7 @@ def compute_absolute_abundance_with_error(counts_df, dna_conc, volume, fastq_fil
         List of FASTQ files to calculate final DNA weight (mandatory)
     n_monte_carlo : int
         Number of Monte Carlo samples for confidence interval estimation
-    zero_replacement_alpha : float
+    alpha : float
         Dirichlet prior parameter (pseudocount to add to each feature).
 
     Returns:
@@ -107,10 +107,10 @@ def compute_absolute_abundance_with_error(counts_df, dna_conc, volume, fastq_fil
 
     print("Scaling factors:", scaling_factors)
     print(f"Note: Samples with higher scaling factors will have proportionally larger confidence intervals")
-    print(f"Using Dirichlet prior for Monte Carlo sampling with alpha={zero_replacement_alpha}")
+    print(f"Using Dirichlet prior for Monte Carlo sampling with alpha={alpha}")
 
     counts_matrix = counts_df.values.astype(float)
-    prior = zero_replacement_alpha
+    prior = alpha
 
     # Initialize arrays to store Monte Carlo results
     mc_results = np.zeros((n_monte_carlo, counts_df.shape[0], counts_df.shape[1]))

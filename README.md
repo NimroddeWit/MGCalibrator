@@ -1,9 +1,10 @@
-# Absolutifier (Python Version)
+# Absolutifier
 
-Absolutifier is a Python-based command-line tool that computes **absolute quantification** from metagenomic data.
-It combines relative abundance matrices (from reads or contigs), metadata (e.g., DNA concentration), and a fixed volume to return an **absolute abundance matrix** for downstream analysis.
+Raw feature counts from metagenomic sequencing are not directly comparable across samples due to variations in sequencing depth and initial DNA input. `Absolutifier` addresses this by converting raw counts into **absolute abundances**.
 
-Works with any type of biological features: **taxa, genes, functional categories, etc.**
+The tool works by calculating a sample-specific scaling factor based on the total DNA weight (concentration × volume) present *before* sequencing. This scaling factor is used to normalize the raw counts, allowing for valid comparisons across samples.`Absolutifier` estimates uncertainty in these absolute abundances by adding a pseudocount to the observed counts and then drawing Monte Carlo samples from a Dirichlet distribution and provides a measure of error (95% confidence intervals for each feature).
+
+`Absolutifier` works with any type of biological features: **taxa, genes, functional categories, etc.**
 
 ---
 
@@ -46,12 +47,19 @@ absolutifier \
 |------------------|---------------------------------------------------------------------------------|
 | `--counts`       | CSV file with **sample rows** and **feature columns** (e.g., `sample_id,feature_1,...`) |
 | `--meta`         | CSV file with `sample_id` and `DNA_conc` columns                               |
-| `--volume`       | Fixed DNA volume (microL) to apply to all samples                              |
+| `--volume`       | DNA volume (microL) before sequencing (fixed for all samples)                              |
 | `--output`       | Output CSV file with absolute abundances                                       |
-| `--fastq_folder` | *(Optional)* Folder with FASTQ/FASTA files                                     |
-| `--suffixes`     | *(Optional)* List of suffixes for filtering file names (e.g., `_R1 _R2`)       |
+| `--fastq_folder` | **(Required)** Folder with FASTQ/FASTA files                                     |
 | `--extension`    | *(Optional)* File extension (default: `.fastq`)                                |
+| `--suffixes`     | *(Optional)* List of suffixes for filtering file names (e.g., `_R1 _R2`)       |
 | `--singleton`    | *(Optional)* Additional single FASTQ file(s) to include                        |
+| `--error_bars`   | *(Optional)* Flag to calculate 95% confidence intervals with Monte Carlo sampling |
+| `--mc_samples`   | *(Optional)* Number of Monte Carlo samples for error bars (default: 1000)      |
+| `--alpha`        | *(Optional)* Dirichlet prior for the Bayesian error model (default: 0.5)        |
+| `--plot`         | *(Optional)* Flag to generate visualization plots of the results               |
+| `--top_features` | *(Optional)* Number of top features to include in plots (default: 20)          |
+| `--plot_format`  | *(Optional)* Image format for plots (png, pdf, svg; default: png)               |
+| `--figsize`      | *(Optional)* Figure size for plots (width height; default: 12 8)                |
 
 ---
 
@@ -77,11 +85,13 @@ sample_3,29.3
 
 ---
 
-## 🛠 Features in Development
+## 🛠️ Features
 
-- Base count summaries from FASTQ files
-- Sample-wise normalization reports
-- Optional debug outputs
+- **FASTQ-based Normalization**: Calculates scaling factors by comparing DNA input to total sequenced base pairs.
+- **Robust Error Propagation**: Computes 95% confidence intervals using a Bayesian model with Monte Carlo sampling.
+- **Comprehensive Outputs**: Generates consolidated tables with counts, absolute abundances, confidence intervals, and scaling factors.
+- **Publication-Ready Plots**: Creates high-quality bar plots, heatmaps, and confidence interval comparisons.
+- **Flexible Input**: Supports paired-end, single-end, and mixed FASTQ/FASTA files.
 
 ---
 
