@@ -2,7 +2,7 @@
 
 Raw feature counts from metagenomic sequencing are not directly comparable across samples due to variations in sequencing depth and initial DNA input. `Absolutifier` addresses this by converting raw counts into **absolute abundances**.
 
-The tool works by calculating a sample-specific scaling factor based on the total DNA weight (concentration × volume) present *before* sequencing. This scaling factor is used to normalize the raw counts, allowing for valid comparisons across samples.`Absolutifier` estimates uncertainty in these absolute abundances by adding a pseudocount to the observed counts and then drawing Monte Carlo samples from a Dirichlet distribution and provides a measure of error (95% confidence intervals for each feature).
+The tool works by calculating a sample-specific scaling factor based on the total DNA weight (concentration × volume) present *before* sequencing. This scaling factor is used to *absolutify* the raw counts, allowing for valid simulation of scale across samples.`Absolutifier` estimates uncertainty in these absolute abundances by adding a pseudocount to the observed counts and then drawing Monte Carlo samples from a Dirichlet distribution and provides a measure of error (95% confidence intervals for each feature).
 
 `Absolutifier` works with any type of biological features: **taxa, genes, functional categories, etc.**
 
