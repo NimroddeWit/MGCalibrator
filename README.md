@@ -87,7 +87,7 @@ sample_3,29.3
 
 ## 🛠️ Features
 
-- **FASTQ-based Normalization**: Calculates scaling factors by comparing DNA input to total sequenced base pairs.
+- **Scaling factor**: Calculates scaling factors by comparing DNA input to total sequenced base pairs.
 - **Robust Error Propagation**: Computes 95% confidence intervals using a Bayesian model with Monte Carlo sampling.
 - **Comprehensive Outputs**: Generates consolidated tables with counts, absolute abundances, confidence intervals, and scaling factors.
 - **Publication-Ready Plots**: Creates high-quality bar plots, heatmaps, and confidence interval comparisons.
