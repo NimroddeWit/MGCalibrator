@@ -4,7 +4,7 @@ setup(
     name='absolutifier',
     version='0.1',
     packages=find_packages(),
-    install_requires=['biopython', 'pandas', 'numpy'],
+    install_requires=['biopython', 'pandas', 'numpy', 'matplotlib', 'seaborn'],
     entry_points={
         'console_scripts': [
             'absolutifier=absolutifier.cli:main'
