@@ -17,7 +17,7 @@ def _init_worker_logging():
 
 def fast_count_base_pairs(filepath):
     """
-    Quickly count base pairs in a FASTQ or FASTA file, handling compression.
+    Count base pairs in a FASTQ or FASTA file, handling compression.
     """
     total_bp = 0
     is_fastq = any(filepath.endswith(ext) for ext in ['.fastq', '.fq', '.fastq.gz', '.fq.gz', '.fastq.gzip', '.fq.gzip'])
