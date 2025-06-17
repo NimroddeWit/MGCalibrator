@@ -3,9 +3,9 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from .parser import read_fastq
+import logging
 from .processor import compute_absolute_abundance, compute_absolute_abundance_with_error
-from .fileutils import list_fastq_files
+from .fileutils import list_sequence_files
 
 def main():
     parser = argparse.ArgumentParser(description="Absolutifier - convert relative abundances to absolute")
@@ -13,10 +13,15 @@ def main():
     parser.add_argument("--meta", required=True, help="CSV file with concentrations")
     parser.add_argument("--output", required=True, help="Output CSV file")
     parser.add_argument("--volume", type=float, required=True, help="DNA volume (microL), used for all samples")
-    parser.add_argument("--fastq_folder", required=True, help="Folder containing FASTQ files (mandatory)")
-    parser.add_argument("--extension", default=".fastq", help="FASTQ file extension (default: .fastq)")
-    parser.add_argument("--suffixes", nargs="*", help="List of suffixes to filter in files")
+    parser.add_argument("--fastq_folder", required=True, help="Folder containing sequence files (mandatory)")
+    parser.add_argument("--extensions", nargs='*', default=[".fastq", ".fq", ".fasta"], 
+                        help="List of sequence file extensions to search for (default: .fastq .fq .fasta)")
+    parser.add_argument("--suffixes", nargs="*", help="List of suffixes to filter in files (e.g., _R1 _R2)")
     parser.add_argument("--singleton", nargs="*", help="List of singleton files to include")
+    
+    # Performance options
+    parser.add_argument("--threads", type=int, default=None,
+                        help="Number of threads to use for parallel processing (default: all available cores)")
     
     # Error propagation options
     parser.add_argument("--error_bars", action="store_true", 
@@ -38,18 +43,26 @@ def main():
     
     args = parser.parse_args()
 
-    # FASTQ files are now mandatory
-    fastq_files = list_fastq_files(
+    # --- Setup Logging ---
+    logging.basicConfig(level=logging.INFO, 
+                        format='%(asctime)s - %(levelname)s - %(message)s',
+                        datefmt='%Y-%m-%d %H:%M:%S')
+    
+    logging.info("Starting Absolutifier run")
+    logging.info(f"Using up to {args.threads or 'all available'} threads.")
+
+    # Sequence files are now mandatory
+    sequence_files = list_sequence_files(
         folder=args.fastq_folder,
-        extension=args.extension,
+        extensions=args.extensions,
         suffixes=args.suffixes,
         singleton_files=args.singleton
     )
     
-    if not fastq_files:
-        raise ValueError(f"No FASTQ files found in {args.fastq_folder} with extension {args.extension}")
+    if not sequence_files:
+        raise ValueError(f"No sequence files found in {args.fastq_folder} with specified extensions.")
     
-    print("FASTQ files found:", fastq_files)
+    logging.info(f"Found {len(sequence_files)} sequence files.")
 
     counts = pd.read_csv(args.counts, index_col=0).T
     meta = pd.read_csv(args.meta)
@@ -57,14 +70,14 @@ def main():
     volume = {sample: float(args.volume) for sample in meta.sample_id}
 
     if args.error_bars:
-        print(f"Calculating 95% confidence intervals with {args.mc_samples} Monte Carlo samples...")
-        print(f"Using statistically robust approach with scaling factor error propagation...")
-        print(f"Using Dirichlet prior with alpha={args.alpha}")
+        logging.info(f"Calculating 95% confidence intervals with {args.mc_samples} Monte Carlo samples...")
+        logging.info(f"Using Dirichlet prior with alpha={args.alpha}")
         
         absolute, lower_ci, upper_ci, zero_replaced, scaling_factors = compute_absolute_abundance_with_error(
-            counts, dna_conc, volume, fastq_files,
+            counts, dna_conc, volume, sequence_files,
             n_monte_carlo=args.mc_samples,
-            alpha=args.alpha
+            alpha=args.alpha,
+            n_workers=args.threads
         )
         
         # Create consolidated output with all information including zero-replaced counts and scaling factors
@@ -80,10 +93,10 @@ def main():
         scaling_factors_df = pd.DataFrame([scaling_factors], index=['scaling_factor'])
         scaling_factors_df.to_csv(scaling_factors_output)
         
-        print(f"Results saved:")
-        print(f"  - Consolidated results (counts, absolute, CI): {args.output}")
-        print(f"  - Zero-replaced counts (for transparency): {zero_replaced_output}")
-        print(f"  - Scaling factors: {scaling_factors_output}")
+        logging.info(f"Results saved:")
+        logging.info(f"  - Consolidated results (counts, absolute, CI): {args.output}")
+        logging.info(f"  - Zero-replaced counts (for transparency): {zero_replaced_output}")
+        logging.info(f"  - Scaling factors: {scaling_factors_output}")
         
         # Generate plots if requested
         if args.plot:
@@ -92,10 +105,10 @@ def main():
                 counts, absolute, lower_ci, upper_ci,
                 plot_output_base, args.top_features, args.plot_format, args.figsize
             )
-            print(f"  - Plots saved: {plot_output_base}_*.{args.plot_format}")
+            logging.info(f"  - Plots saved: {plot_output_base}_*.{args.plot_format}")
         
     else:
-        absolute, scaling_factors = compute_absolute_abundance(counts, dna_conc, volume, fastq_files)
+        absolute, scaling_factors = compute_absolute_abundance(counts, dna_conc, volume, sequence_files, n_workers=args.threads)
         
         # Create simple consolidated output without confidence intervals but with scaling factors
         consolidated_df = create_simple_consolidated_output(counts, absolute, scaling_factors)
@@ -106,8 +119,8 @@ def main():
         scaling_factors_df = pd.DataFrame([scaling_factors], index=['scaling_factor'])
         scaling_factors_df.to_csv(scaling_factors_output)
         
-        print(f"Absolute abundances saved to: {args.output}")
-        print(f"Scaling factors saved to: {scaling_factors_output}")
+        logging.info(f"Absolute abundances saved to: {args.output}")
+        logging.info(f"Scaling factors saved to: {scaling_factors_output}")
         
         # Generate plots if requested
         if args.plot:
@@ -115,7 +128,7 @@ def main():
             plot_absolute_abundances_simple(
                 counts, absolute, plot_output_base, args.top_features, args.plot_format, args.figsize
             )
-            print(f"  - Plots saved: {plot_output_base}_*.{args.plot_format}")
+            logging.info(f"  - Plots saved: {plot_output_base}_*.{args.plot_format}")
 
 def create_consolidated_output(counts_df, absolute_df, lower_ci_df, upper_ci_df, zero_replaced_df, scaling_factors):
     """
@@ -246,7 +259,7 @@ def plot_absolute_abundances_with_ci(counts_df, absolute_df, lower_ci_df, upper_
     figsize : list
         Figure size [width, height]
     """
-    print(f"\n=== GENERATING PUBLICATION-QUALITY PLOTS ===")
+    logging.info(f"\n=== GENERATING PUBLICATION-QUALITY PLOTS ===")
     
     # Set publication-style plot parameters
     plt.style.use('default')
@@ -265,7 +278,7 @@ def plot_absolute_abundances_with_ci(counts_df, absolute_df, lower_ci_df, upper_
     mean_abundance = absolute_df.mean(axis=1).sort_values(ascending=False)
     top_feature_names = mean_abundance.head(top_features).index
     
-    print(f"Plotting top {len(top_feature_names)} features by mean absolute abundance")
+    logging.info(f"Plotting top {len(top_feature_names)} features by mean absolute abundance")
     
     # Plot 1: Bar plot with error bars for each sample
     n_samples = len(absolute_df.columns)
@@ -363,10 +376,10 @@ def plot_absolute_abundances_with_ci(counts_df, absolute_df, lower_ci_df, upper_
     plt.savefig(f"{output_base}_top5_comparison.{plot_format}", dpi=300, bbox_inches='tight')
     plt.close()
     
-    print(f"✓ Generated 3 plots:")
-    print(f"  - Bar plots by sample: {output_base}_barplot_by_sample.{plot_format}")
-    print(f"  - Heatmap: {output_base}_heatmap.{plot_format}")
-    print(f"  - Top 5 comparison: {output_base}_top5_comparison.{plot_format}")
+    logging.info(f"✓ Generated 3 plots:")
+    logging.info(f"  - Bar plots by sample: {output_base}_barplot_by_sample.{plot_format}")
+    logging.info(f"  - Heatmap: {output_base}_heatmap.{plot_format}")
+    logging.info(f"  - Top 5 comparison: {output_base}_top5_comparison.{plot_format}")
 
 def plot_absolute_abundances_simple(counts_df, absolute_df, output_base, top_features=20, 
                                   plot_format="png", figsize=[12, 8]):
@@ -388,7 +401,7 @@ def plot_absolute_abundances_simple(counts_df, absolute_df, output_base, top_fea
     figsize : list
         Figure size [width, height]
     """
-    print(f"\n=== GENERATING PLOTS (NO CONFIDENCE INTERVALS) ===")
+    logging.info(f"\n=== GENERATING PLOTS (NO CONFIDENCE INTERVALS) ===")
     
     # Set plot parameters
     plt.style.use('default')
@@ -407,7 +420,7 @@ def plot_absolute_abundances_simple(counts_df, absolute_df, output_base, top_fea
     mean_abundance = absolute_df.mean(axis=1).sort_values(ascending=False)
     top_feature_names = mean_abundance.head(top_features).index
     
-    print(f"Plotting top {len(top_feature_names)} features by mean absolute abundance")
+    logging.info(f"Plotting top {len(top_feature_names)} features by mean absolute abundance")
     
     # Plot 1: Bar plot for each sample
     n_samples = len(absolute_df.columns)
@@ -466,6 +479,6 @@ def plot_absolute_abundances_simple(counts_df, absolute_df, output_base, top_fea
     plt.savefig(f"{output_base}_heatmap.{plot_format}", dpi=300, bbox_inches='tight')
     plt.close()
     
-    print(f"✓ Generated 2 plots:")
-    print(f"  - Bar plots by sample: {output_base}_barplot_by_sample.{plot_format}")
-    print(f"  - Heatmap: {output_base}_heatmap.{plot_format}")
+    logging.info(f"✓ Generated 2 plots:")
+    logging.info(f"  - Bar plots by sample: {output_base}_barplot_by_sample.{plot_format}")
+    logging.info(f"  - Heatmap: {output_base}_heatmap.{plot_format}")
