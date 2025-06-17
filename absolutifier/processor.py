@@ -52,6 +52,24 @@ def _perform_mc_simulation_for_sample(args):
         # Return index and zero array
         return sample_idx, np.zeros((n_monte_carlo, len(sample_counts)))
 
+    # Special case for a single feature to avoid degenerate Dirichlet distribution.
+    # Model the count uncertainty using a Gamma distribution, which is the conjugate
+    # prior for the rate of a Poisson distribution. This is the correct model for a single count.
+    if len(sample_counts) == 1:
+        count = sample_counts[0]
+        # The posterior for a Poisson rate, with a Gamma(alpha, beta) prior, is
+        # Gamma(alpha + count, beta + 1). We use a non-informative prior where beta -> 0,
+        # giving a posterior of Gamma(count + prior, 1).
+        sampled_counts = np.random.gamma(shape=count + prior, scale=1.0, size=n_monte_carlo)
+        
+        # Apply scaling factor and reshape for consistency
+        sampled_absolute = (sampled_counts * scaling_factor).reshape(-1, 1)
+        
+        logging.debug(f"Finished MC simulation for single-feature sample: {sample_name}")
+        return sample_idx, sampled_absolute
+
+    # --- Standard multi-feature case ---
+    
     # Posterior is Dirichlet(counts + prior)
     dirichlet_params = sample_counts + prior
 
