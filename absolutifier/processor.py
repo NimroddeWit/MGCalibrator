@@ -1,8 +1,11 @@
 import pandas as pd
 import numpy as np
+import logging
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from .parser import calculate_total_base_pairs
 
-def compute_absolute_abundance(counts_df, dna_conc, volume, fastq_files):
+def compute_absolute_abundance(counts_df, dna_conc, volume, fastq_files, n_workers=None):
     """
     Compute absolute abundance by scaling raw counts with a scaling factor.
     
@@ -18,7 +21,7 @@ def compute_absolute_abundance(counts_df, dna_conc, volume, fastq_files):
     initial_dna_weight = {sample: dna_conc[sample] * volume[sample] for sample in counts_df.columns}
     
     # Calculate final DNA weight from FASTQ files
-    sample_base_pairs = calculate_total_base_pairs(fastq_files)
+    sample_base_pairs = calculate_total_base_pairs(fastq_files, n_workers=n_workers)
     # Convert base pairs to DNA weight (assuming average molecular weight per base pair)
     # Using approximately 650 Da per base pair (average of A, T, G, C)
     # 1 Da = 1.66054e-15 ng, so 650 Da = 1.079e-12 ng per base pair
@@ -34,14 +37,61 @@ def compute_absolute_abundance(counts_df, dna_conc, volume, fastq_files):
     scaling_factors = {sample: initial_dna_weight[sample] / final_dna_weight[sample] 
                       for sample in counts_df.columns}
     
-    print("Scaling factors:", scaling_factors)
+    logging.info(f"Calculated scaling factors: {scaling_factors}")
     
     absolute = counts_df.multiply(pd.Series(scaling_factors))
     return absolute, scaling_factors
 
+def _perform_mc_simulation_for_sample(args):
+    """Helper function to run MC simulation for a single sample in a separate process."""
+    sample_idx, sample_name, sample_counts, scaling_factor, total_counts, prior, n_monte_carlo = args
+    
+    logging.debug(f"Starting MC simulation for sample: {sample_name}")
+
+    if total_counts == 0:
+        # Return index and zero array
+        return sample_idx, np.zeros((n_monte_carlo, len(sample_counts)))
+
+    # Special case for a single feature to avoid degenerate Dirichlet distribution.
+    # Model the count uncertainty using a Gamma distribution, which is the conjugate
+    # prior for the rate of a Poisson distribution. This is the correct model for a single count.
+    if len(sample_counts) == 1:
+        count = sample_counts[0]
+        # The posterior for a Poisson rate, with a Gamma(alpha, beta) prior, is
+        # Gamma(alpha + count, beta + 1). We use a non-informative prior where beta -> 0,
+        # giving a posterior of Gamma(count + prior, 1).
+        sampled_counts = np.random.gamma(shape=count + prior, scale=1.0, size=n_monte_carlo)
+        
+        # Apply scaling factor and reshape for consistency
+        sampled_absolute = (sampled_counts * scaling_factor).reshape(-1, 1)
+        
+        logging.debug(f"Finished MC simulation for single-feature sample: {sample_name}")
+        return sample_idx, sampled_absolute
+
+    # --- Standard multi-feature case ---
+    
+    # Posterior is Dirichlet(counts + prior)
+    dirichlet_params = sample_counts + prior
+
+    # Monte Carlo samples from the posterior distribution
+    # Sample from a Dirichlet distribution `n_monte_carlo` times
+    sampled_proportions = np.random.dirichlet(dirichlet_params, size=n_monte_carlo)
+
+    # For each set of proportions, sample from a multinomial to get counts
+    # This adds the sampling noise from the sequencing process
+    sampled_counts = np.array([np.random.multinomial(int(total_counts), p) for p in sampled_proportions])
+
+    # Apply scaling factor to get absolute abundance
+    sampled_absolute = sampled_counts * scaling_factor
+    
+    logging.debug(f"Finished MC simulation for sample: {sample_name}")
+    
+    return sample_idx, sampled_absolute
+
 def compute_absolute_abundance_with_error(counts_df, dna_conc, volume, fastq_files,
                                         n_monte_carlo=1000,
-                                        alpha=0.5):
+                                        alpha=0.5,
+                                        n_workers=None):
     """
     Compute absolute abundance with 95% confidence intervals using a Bayesian approach.
 
@@ -75,6 +125,8 @@ def compute_absolute_abundance_with_error(counts_df, dna_conc, volume, fastq_fil
         Number of Monte Carlo samples for confidence interval estimation
     alpha : float
         Dirichlet prior parameter (pseudocount to add to each feature).
+    n_workers : int, optional
+        Number of worker processes to use for parallel computation.
 
     Returns:
     --------
@@ -92,7 +144,7 @@ def compute_absolute_abundance_with_error(counts_df, dna_conc, volume, fastq_fil
     initial_dna_weight = {sample: dna_conc[sample] * volume[sample] for sample in counts_df.columns}
 
     # Calculate final DNA weight from FASTQ files
-    sample_base_pairs = calculate_total_base_pairs(fastq_files)
+    sample_base_pairs = calculate_total_base_pairs(fastq_files, n_workers=n_workers)
     final_dna_weight = {sample: sample_base_pairs.get(sample, 0) * 1.079e-12  # Convert to ng
                        for sample in counts_df.columns}
 
@@ -105,41 +157,52 @@ def compute_absolute_abundance_with_error(counts_df, dna_conc, volume, fastq_fil
     scaling_factors = {sample: initial_dna_weight[sample] / final_dna_weight[sample]
                       for sample in counts_df.columns}
 
-    print("Scaling factors:", scaling_factors)
-    print(f"Note: Samples with higher scaling factors will have proportionally larger confidence intervals")
-    print(f"Using Dirichlet prior for Monte Carlo sampling with alpha={alpha}")
+    logging.info(f"Calculated scaling factors: {scaling_factors}")
+    logging.info(f"Note: Samples with higher scaling factors will have proportionally larger confidence intervals")
+    logging.info(f"Using Dirichlet prior for Monte Carlo sampling with alpha={alpha}")
 
+    if n_workers is None:
+        n_workers = os.cpu_count()
+
+    logging.info(f"Running Monte Carlo simulation with {n_monte_carlo} samples using up to {n_workers} workers...")
+    
     counts_matrix = counts_df.values.astype(float)
     prior = alpha
 
     # Initialize arrays to store Monte Carlo results
     mc_results = np.zeros((n_monte_carlo, counts_df.shape[0], counts_df.shape[1]))
 
-    for sample_idx, sample in enumerate(counts_df.columns):
-        sample_counts = counts_matrix[:, sample_idx]
-        scaling_factor = scaling_factors[sample]
-        total_counts = sample_counts.sum()
+    # --- Parallel Monte Carlo Simulation ---
+    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        # Create a list of arguments for each sample's simulation
+        tasks = []
+        for sample_idx, sample in enumerate(counts_df.columns):
+            sample_counts = counts_matrix[:, sample_idx]
+            task_args = (
+                sample_idx,
+                sample,
+                sample_counts,
+                scaling_factors[sample],
+                sample_counts.sum(),
+                prior,
+                n_monte_carlo
+            )
+            tasks.append(task_args)
 
-        if total_counts == 0:
-            mc_results[:, :, sample_idx] = 0
-            continue
+        # Submit tasks and collect results
+        futures = [executor.submit(_perform_mc_simulation_for_sample, task) for task in tasks]
+        
+        for future in as_completed(futures):
+            try:
+                sample_idx, result_matrix = future.result()
+                mc_results[:, :, sample_idx] = result_matrix
+            except Exception as e:
+                logging.error(f"A task in Monte Carlo simulation failed: {e}")
 
-        # Posterior is Dirichlet(counts + prior)
-        dirichlet_params = sample_counts + prior
-
-        #Monte Carlo samples from the posterior distribution
-        #sample from a dirichlet distribution `n_monte_carlo` times
-        sampled_proportions = np.random.dirichlet(dirichlet_params, size=n_monte_carlo)
-
-        # For each set of proportions, sample from a multinomial to get counts
-        #adds the sampling noise from the sequencing process
-        sampled_counts = np.array([np.random.multinomial(int(total_counts), p) for p in sampled_proportions])
-
-        #Apply scaling factor to get absolute abundance
-        sampled_absolute = sampled_counts * scaling_factor
-        mc_results[:, :, sample_idx] = sampled_absolute.T
-
+    logging.info("Monte Carlo simulation finished.")
+    
     # Compute point estimate and CIs from the MC samples.
+    logging.info("Calculating point estimates and confidence intervals from simulation results...")
     absolute_point_values = np.mean(mc_results, axis=0)
     lower_ci_values = np.percentile(mc_results, 2.5, axis=0)
     upper_ci_values = np.percentile(mc_results, 97.5, axis=0)
@@ -162,13 +225,13 @@ def compute_absolute_abundance_with_error(counts_df, dna_conc, volume, fastq_fil
 
     zero_replaced_df = pd.DataFrame(posterior_mean_counts_matrix, index=counts_df.index, columns=counts_df.columns)
 
-    print(f"Confidence intervals computed with proper scaling factor error propagation.")
+    logging.info(f"Confidence intervals computed with proper scaling factor error propagation.")
 
     if len(scaling_factors) > 1:
         max_sf = max(scaling_factors.values())
         min_sf = min(scaling_factors.values())
         if min_sf > 0:
-            print(f"Check: Samples with scaling factors {max_sf:.2f} vs {min_sf:.2f}")
-            print(f"should have ~{max_sf/min_sf:.1f}x wider confidence intervals")
+            logging.info(f"Check: Samples with scaling factors {max_sf:.2f} vs {min_sf:.2f} "
+                         f"should have ~{max_sf/min_sf:.1f}x wider confidence intervals")
 
     return absolute_point, lower_ci, upper_ci, zero_replaced_df, scaling_factors
