@@ -1,13 +1,13 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='absolutifier',
+    name='MGCalibrator',
     version='0.1',
     packages=find_packages(),
     install_requires=['biopython', 'pandas', 'numpy', 'matplotlib', 'seaborn'],
     entry_points={
         'console_scripts': [
-            'absolutifier=absolutifier.cli:main'
+            'MGCalibrator=MGCalibrator.cli:main'
         ]
     },
 )
