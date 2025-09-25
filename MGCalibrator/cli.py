@@ -5,19 +5,21 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import logging
 from .processor import compute_absolute_abundance, compute_absolute_abundance_with_error
-from .fileutils import list_sequence_files
+from .fileutils import list_bam_files
 
 def main():
-    parser = argparse.ArgumentParser(description="Absolutifier - convert relative abundances to absolute")
+    parser = argparse.ArgumentParser(description="MGCalibrator - calculate absolute abundances with standard error")
     parser.add_argument("--counts", required=True, help="CSV file with counts")
     parser.add_argument("--meta", required=True, help="CSV file with concentrations")
+    #parser.add_argument("--DNA_mass", required=True, help="CSV file with measured DNA mass (ng)") This change will be implemented later
     parser.add_argument("--output", required=True, help="Output CSV file")
     parser.add_argument("--volume", type=float, required=True, help="DNA volume (microL), used for all samples")
-    parser.add_argument("--fastq_folder", required=True, help="Folder containing sequence files (mandatory)")
-    parser.add_argument("--extensions", nargs='*', default=[".fastq", ".fq", ".fasta"], 
-                        help="List of sequence file extensions to search for (default: .fastq .fq .fasta)")
-    parser.add_argument("--suffixes", nargs="*", help="List of suffixes to filter in files (e.g., _R1 _R2)")
-    parser.add_argument("--singleton", nargs="*", help="List of singleton files to include")
+    #parser.add_argument("--fastq_folder", required=True, help="Folder containing sequence files (mandatory)")
+    parser.add_argument("--bam_folder", required=True, help="Folder containing BAM files (mandatory)")
+    parser.add_argument("--extensions", nargs='*', default=[".sorted.bam", ".sort.bam"], 
+                        help="List of sequence file extensions to search for (default: .sorted.bam, .sort.bam)")
+    parser.add_argument("--suffixes", nargs="*", help="List of suffixes to filter in files")
+    #parser.add_argument("--singleton", nargs="*", help="List of singleton files to include")
     
     # Performance options
     parser.add_argument("--threads", type=int, default=None,
@@ -44,7 +46,7 @@ def main():
     args = parser.parse_args()
 
     # --- Setup Logging ---
-    logging.basicConfig(level=logging.INFO, 
+    logging.basicConfig(level=logging.DEBUG, 
                         format='%(asctime)s - %(levelname)s - %(message)s',
                         datefmt='%Y-%m-%d %H:%M:%S')
     
@@ -52,17 +54,17 @@ def main():
     logging.info(f"Using up to {args.threads or 'all available'} threads.")
 
     # Sequence files are now mandatory
-    sequence_files = list_sequence_files(
-        folder=args.fastq_folder,
+    bam_files = list_bam_files(
+        folder=args.bam_folder,
         extensions=args.extensions,
-        suffixes=args.suffixes,
-        singleton_files=args.singleton
+        #suffixes=args.suffixes,
+        #singleton_files=args.singleton
     )
     
-    if not sequence_files:
-        raise ValueError(f"No sequence files found in {args.fastq_folder} with specified extensions.")
+    if not bam_files:
+        raise ValueError(f"No BAM files found in {args.bam_folder} with specified extensions.")
     
-    logging.info(f"Found {len(sequence_files)} sequence files.")
+    logging.info(f"Found {len(bam_files)} BAM files.")
 
     counts = pd.read_csv(args.counts, index_col=0).T
     meta = pd.read_csv(args.meta)
@@ -74,7 +76,7 @@ def main():
         logging.info(f"Using Dirichlet prior with alpha={args.alpha}")
         
         absolute, lower_ci, upper_ci, zero_replaced, scaling_factors = compute_absolute_abundance_with_error(
-            counts, dna_conc, volume, sequence_files,
+            counts, dna_conc, volume, bam_files,
             n_monte_carlo=args.mc_samples,
             alpha=args.alpha,
             n_workers=args.threads
@@ -108,7 +110,7 @@ def main():
             logging.info(f"  - Plots saved: {plot_output_base}_*.{args.plot_format}")
         
     else:
-        absolute, scaling_factors = compute_absolute_abundance(counts, dna_conc, volume, sequence_files, n_workers=args.threads)
+        absolute, scaling_factors = compute_absolute_abundance(counts, dna_conc, volume, bam_files, n_workers=args.threads)
         
         # Create simple consolidated output without confidence intervals but with scaling factors
         consolidated_df = create_simple_consolidated_output(counts, absolute, scaling_factors)

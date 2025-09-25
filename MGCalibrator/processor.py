@@ -5,33 +5,33 @@ import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from .parser import calculate_total_base_pairs
 
-def compute_absolute_abundance(counts_df, dna_conc, volume, fastq_files, n_workers=None):
+def compute_absolute_abundance(counts_df, dna_conc, volume, bam_files, n_workers=None):
     """
     Compute absolute abundance by scaling raw counts with a scaling factor.
     
     Formula: absolute_abundance = raw_counts * scaling_factor
     Where: scaling_factor = initial_dna_weight / final_dna_weight
            initial_dna_weight = dna_conc * volume
-           final_dna_weight = calculated from base pairs in FASTQ files
+           final_dna_weight = calculated from base pairs in BAM files
     """
-    if not fastq_files:
-        raise ValueError("FASTQ files are required to calculate DNA weight from base pairs")
+    if not bam_files:
+        raise ValueError("BAM files are required to calculate DNA weight from base pairs")
     
     # Calculate initial DNA weight for each sample
     initial_dna_weight = {sample: dna_conc[sample] * volume[sample] for sample in counts_df.columns}
     
-    # Calculate final DNA weight from FASTQ files
-    sample_base_pairs = calculate_total_base_pairs(fastq_files, n_workers=n_workers)
+    # Calculate final DNA weight from BAM files
+    sample_base_pairs = calculate_total_base_pairs(bam_files, n_workers=n_workers)
     # Convert base pairs to DNA weight (assuming average molecular weight per base pair)
     # Using approximately 650 Da per base pair (average of A, T, G, C)
     # 1 Da = 1.66054e-15 ng, so 650 Da = 1.079e-12 ng per base pair
     final_dna_weight = {sample: sample_base_pairs.get(sample, 0) * 1.079e-12  # Convert to ng
                        for sample in counts_df.columns}
     
-    # Check for samples with no FASTQ data
+    # Check for samples with no BAM data
     for sample in counts_df.columns:
         if final_dna_weight[sample] == 0:
-            raise ValueError(f"No base pairs found for sample {sample} in FASTQ files")
+            raise ValueError(f"No base pairs found for sample {sample} in BAM files")
     
     # Calculate scaling factors
     scaling_factors = {sample: initial_dna_weight[sample] / final_dna_weight[sample] 
@@ -88,7 +88,7 @@ def _perform_mc_simulation_for_sample(args):
     
     return sample_idx, sampled_absolute
 
-def compute_absolute_abundance_with_error(counts_df, dna_conc, volume, fastq_files,
+def compute_absolute_abundance_with_error(counts_df, dna_conc, volume, bam_files,
                                         n_monte_carlo=1000,
                                         alpha=0.5,
                                         n_workers=None):
@@ -119,8 +119,8 @@ def compute_absolute_abundance_with_error(counts_df, dna_conc, volume, fastq_fil
         Dictionary mapping sample names to DNA concentrations
     volume : dict
         Dictionary mapping sample names to volumes
-    fastq_files : list
-        List of FASTQ files to calculate final DNA weight (mandatory)
+    bam_files : list
+        List of BAM files to calculate final DNA weight (mandatory)
     n_monte_carlo : int
         Number of Monte Carlo samples for confidence interval estimation
     alpha : float
@@ -137,21 +137,24 @@ def compute_absolute_abundance_with_error(counts_df, dna_conc, volume, fastq_fil
         - zero_replaced_counts: DataFrame with posterior mean counts for transparency
         - scaling_factors: Dictionary of scaling factors for each sample
     """
-    if not fastq_files:
-        raise ValueError("FASTQ files are required to calculate DNA weight from base pairs")
+    if not bam_files:
+        raise ValueError("BAM files are required to calculate DNA weight from base pairs")
 
     # Calculate initial DNA weight for each sample
     initial_dna_weight = {sample: dna_conc[sample] * volume[sample] for sample in counts_df.columns}
 
-    # Calculate final DNA weight from FASTQ files
-    sample_base_pairs = calculate_total_base_pairs(fastq_files, n_workers=n_workers)
+    # Calculate final DNA weight from BAM files
+    sample_base_pairs = calculate_total_base_pairs(bam_files, n_workers=n_workers)
     final_dna_weight = {sample: sample_base_pairs.get(sample, 0) * 1.079e-12  # Convert to ng
                        for sample in counts_df.columns}
-
-    # Check for samples with no FASTQ data
+    logging.debug("sample_base_pairs:", sample_base_pairs)
+    logging.debug("counts_df.columns:", counts_df.columns)
+    logging.debug("final_dna_weight:", final_dna_weight)
+    
+    # Check for samples with no BAM data
     for sample in counts_df.columns:
         if final_dna_weight[sample] == 0:
-            raise ValueError(f"No base pairs found for sample {sample} in FASTQ files")
+            raise ValueError(f"No base pairs found for sample {sample} in BAM files")
 
     # Calculate scaling factors
     scaling_factors = {sample: initial_dna_weight[sample] / final_dna_weight[sample]

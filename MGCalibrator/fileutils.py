@@ -1,9 +1,9 @@
 import os
 from glob import glob
 
-def list_sequence_files(folder, extensions=None, suffixes=None, singleton_files=None):
+def list_bam_files(folder, extensions=None, suffixes=None, singleton_files=None):
     if extensions is None:
-        extensions = [".fastq", ".fq", ".fasta"]
+        extensions = [".sorted.bam", ".sort.bam"]
 
     files = []
     all_extensions = []
@@ -36,9 +36,9 @@ def list_sequence_files(folder, extensions=None, suffixes=None, singleton_files=
         files = filtered_files
 
     # Add any singleton files
-    if singleton_files:
-        files.extend(singleton_files)
-        # Ensure final list is unique and sorted
-        files = sorted(list(set(files)))
+    # if singleton_files:
+    #     files.extend(singleton_files)
+    #     # Ensure final list is unique and sorted
+    #     files = sorted(list(set(files)))
         
     return files
