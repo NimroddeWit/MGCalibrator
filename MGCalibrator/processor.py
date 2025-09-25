@@ -38,29 +38,29 @@ def compute_raw_depths(bam_files, min_read_perc_identity=97):
             ]
             samtools_result = subprocess.run(samtools_cmd, capture_output=True, text=True, check=True)
 
-            # Read output to pandas DataFrame
-            # samtools depth output: chrom pos depth (tabgescheiden)
-            depth_df = pd.read_csv(io.StringIO(samtools_result.stdout), sep='\t', header=None, names=['chrom', 'pos', 'depth'])
+            # Read output to pandas DataFrame and drop 'pos' column
+            # samtools depth output: sequence pos depth 
+            depth_df = pd.read_csv(io.StringIO(samtools_result.stdout), sep='\t', header=None, names=['sequence', 'pos', 'depth'])
+            depth_df.drop(columns="pos", inplace=True)
 
             logging.debug(f"depth_df['depth'].mean(): {depth_df['depth'].mean()}")
 
-            depth_df.drop(columns="pos", inplace=True)
-            raw_depth_df = pd.DataFrame(depth_df.groupby(by="chrom").apply(_get_depth_IQM)).reset_index()
+            # Group by sequences
+            raw_depth_df = pd.DataFrame(depth_df.groupby(by="sequence").apply(_get_depth_IQM)).reset_index()
             
+            # Set sample name as column name
             bam_filename = os.path.basename(bam_file)
             sample_name = "_".join(bam_filename.split('_')[0:2])
-
             raw_depth_df.columns = ["sequence", sample_name]
 
             raw_depth_dfs.append(raw_depth_df)
-
-            
 
         finally:
             # Delete temp BAM file
             if os.path.exists(temp_bam_name):
                 os.remove(temp_bam_name)
 
+    # Combine all raw_depth dataframes into single dataframe and set sequences to index
     raw_depth_df = reduce(lambda left, right: pd.merge(left, right, on="sequence", how="outer"), raw_depth_dfs)
     raw_depth_df.set_index("sequence", inplace=True)
 
