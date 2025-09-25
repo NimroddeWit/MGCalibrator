@@ -4,21 +4,21 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 import logging
-from .processor import compute_absolute_abundance_with_error
+from .processor import compute_raw_depths, compute_absolute_abundance_with_error
 from .fileutils import list_bam_files
 
 def main():
     parser = argparse.ArgumentParser(description="MGCalibrator - calculate absolute abundances with standard error")
-    parser.add_argument("--counts", required=True, help="CSV file with counts")
+    parser.add_argument("--bam_folder", required=True, help="Folder containing BAM files (mandatory)")
+    parser.add_argument("--extensions", nargs='*', default=[".sorted.bam", ".sort.bam"], 
+                        help="List of sequence file extensions to search for (default: .sorted.bam, .sort.bam)")
+    parser.add_argument("--suffixes", nargs="*", help="List of suffixes to filter in files")
+    #parser.add_argument("--counts", required=True, help="CSV file with counts")
     #parser.add_argument("--meta", required=True, help="CSV file with concentrations")
     parser.add_argument("--dna_mass", required=True, help="CSV file with measured DNA mass (ng)") 
     parser.add_argument("--output", required=True, help="Output CSV file")
     #parser.add_argument("--volume", type=float, required=True, help="DNA volume (microL), used for all samples")
     #parser.add_argument("--fastq_folder", required=True, help="Folder containing sequence files (mandatory)")
-    parser.add_argument("--bam_folder", required=True, help="Folder containing BAM files (mandatory)")
-    parser.add_argument("--extensions", nargs='*', default=[".sorted.bam", ".sort.bam"], 
-                        help="List of sequence file extensions to search for (default: .sorted.bam, .sort.bam)")
-    parser.add_argument("--suffixes", nargs="*", help="List of suffixes to filter in files")
     #parser.add_argument("--singleton", nargs="*", help="List of singleton files to include")
     
     # Performance options
@@ -66,7 +66,7 @@ def main():
     
     logging.info(f"Found {len(bam_files)} BAM files.")
 
-    counts = pd.read_csv(args.counts, index_col=0).T
+    #counts = pd.read_csv(args.counts, index_col=0).T
     #meta = pd.read_csv(args.meta)
     #dna_conc = dict(zip(meta.sample_id, meta.DNA_conc))
     #volume = {sample: float(args.volume) for sample in meta.sample_id}
@@ -77,6 +77,10 @@ def main():
         logging.info(f"Calculating 95% confidence intervals with {args.mc_samples} Monte Carlo samples...")
         logging.info(f"Using Dirichlet prior with alpha={args.alpha}")
         
+        counts = compute_raw_depths(bam_files)
+
+        logging.debug(f"counts: {counts}")
+
         absolute, lower_ci, upper_ci, zero_replaced, scaling_factors = compute_absolute_abundance_with_error(
             counts, dna_mass, bam_files,
             n_monte_carlo=args.mc_samples,
@@ -192,52 +196,52 @@ def create_consolidated_output(counts_df, absolute_df, lower_ci_df, upper_ci_df,
         columns=consolidated_columns
     )
 
-def create_simple_consolidated_output(counts_df, absolute_df, scaling_factors):
-    """
-    Create a simple consolidated DataFrame with original counts, absolute abundances, and scaling factors.
+# def create_simple_consolidated_output(counts_df, absolute_df, scaling_factors):
+#     """
+#     Create a simple consolidated DataFrame with original counts, absolute abundances, and scaling factors.
     
-    Output format:
-    - Rows: features  
-    - Columns: sample_name_counts, sample_name_absolute, sample_name_scaling_factor
-    """
-    consolidated_columns = []
-    consolidated_data = []
+#     Output format:
+#     - Rows: features  
+#     - Columns: sample_name_counts, sample_name_absolute, sample_name_scaling_factor
+#     """
+#     consolidated_columns = []
+#     consolidated_data = []
     
-    for sample in counts_df.columns:
-        # Add columns for this sample
-        consolidated_columns.extend([
-            f"{sample}_counts",
-            f"{sample}_absolute",
-            f"{sample}_scaling_factor"
-        ])
+#     for sample in counts_df.columns:
+#         # Add columns for this sample
+#         consolidated_columns.extend([
+#             f"{sample}_counts",
+#             f"{sample}_absolute",
+#             f"{sample}_scaling_factor"
+#         ])
         
-        # Create scaling factor column (same value for all features in this sample)
-        scaling_factor_column = np.full(len(counts_df), scaling_factors[sample])
+#         # Create scaling factor column (same value for all features in this sample)
+#         scaling_factor_column = np.full(len(counts_df), scaling_factors[sample])
         
-        # Add data for this sample
-        if len(consolidated_data) == 0:
-            # Initialize with first sample
-            consolidated_data = [
-                counts_df[sample].values,
-                absolute_df[sample].values,
-                scaling_factor_column
-            ]
-        else:
-            # Append additional samples
-            consolidated_data.extend([
-                counts_df[sample].values,
-                absolute_df[sample].values,
-                scaling_factor_column
-            ])
+#         # Add data for this sample
+#         if len(consolidated_data) == 0:
+#             # Initialize with first sample
+#             consolidated_data = [
+#                 counts_df[sample].values,
+#                 absolute_df[sample].values,
+#                 scaling_factor_column
+#             ]
+#         else:
+#             # Append additional samples
+#             consolidated_data.extend([
+#                 counts_df[sample].values,
+#                 absolute_df[sample].values,
+#                 scaling_factor_column
+#             ])
     
-    # Transpose to get correct shape
-    consolidated_array = np.array(consolidated_data).T
+#     # Transpose to get correct shape
+#     consolidated_array = np.array(consolidated_data).T
     
-    return pd.DataFrame(
-        consolidated_array,
-        index=counts_df.index,
-        columns=consolidated_columns
-    )
+#     return pd.DataFrame(
+#         consolidated_array,
+#         index=counts_df.index,
+#         columns=consolidated_columns
+#     )
 
 def plot_absolute_abundances_with_ci(counts_df, absolute_df, lower_ci_df, upper_ci_df, 
                                    output_base, top_features=20, plot_format="png", figsize=[12, 8]):

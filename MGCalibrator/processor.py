@@ -2,45 +2,69 @@ import pandas as pd
 import numpy as np
 import logging
 import os
+import subprocess
+import io
+import tempfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from functools import reduce
 from .parser import calculate_total_base_pairs
 
-# def compute_absolute_abundance(counts_df, dna_conc, volume, bam_files, n_workers=None):
-#     """
-#     Compute absolute abundance by scaling raw counts with a scaling factor.
+def _get_depth_IQM(depth_list):
+    quartile_range = len(depth_list) // 4
+    return np.mean(np.sort(depth_list)[quartile_range:-quartile_range])
+
+def compute_raw_depths(bam_files, min_read_perc_identity=97):
+    """Some description here..."""
     
-#     Formula: absolute_abundance = raw_counts * scaling_factor
-#     Where: scaling_factor = initial_dna_weight / final_dna_weight
-#            initial_dna_weight = dna_conc * volume
-#            final_dna_weight = calculated from base pairs in BAM files
-#     """
-#     if not bam_files:
-#         raise ValueError("BAM files are required to calculate DNA weight from base pairs")
+    raw_depth_dfs = []
     
-#     # Calculate initial DNA weight for each sample
-#     initial_dna_weight = {sample: dna_conc[sample] * volume[sample] for sample in counts_df.columns}
-    
-#     # Calculate final DNA weight from BAM files
-#     sample_base_pairs = calculate_total_base_pairs(bam_files, n_workers=n_workers)
-#     # Convert base pairs to DNA weight (assuming average molecular weight per base pair)
-#     # Using approximately 650 Da per base pair (average of A, T, G, C)
-#     # 1 Da = 1.66054e-15 ng, so 650 Da = 1.079e-12 ng per base pair
-#     final_dna_weight = {sample: sample_base_pairs.get(sample, 0) * 1.079e-12  # Convert to ng
-#                        for sample in counts_df.columns}
-    
-#     # Check for samples with no BAM data
-#     for sample in counts_df.columns:
-#         if final_dna_weight[sample] == 0:
-#             raise ValueError(f"No base pairs found for sample {sample} in BAM files")
-    
-#     # Calculate scaling factors
-#     scaling_factors = {sample: initial_dna_weight[sample] / final_dna_weight[sample] 
-#                       for sample in counts_df.columns}
-    
-#     logging.info(f"Calculated scaling factors: {scaling_factors}")
-    
-#     absolute = counts_df.multiply(pd.Series(scaling_factors))
-#     return absolute, scaling_factors
+    for bam_file in bam_files:
+        with tempfile.NamedTemporaryFile(suffix=".bam", delete=False) as temp_bam:
+            temp_bam_name = temp_bam.name
+
+        try: 
+            # Run CoverM filter
+            coverm_cmd = [
+                "coverm", "filter", 
+                "-b", bam_file,
+                "-o", temp_bam_name,
+                "--min-read-percent-identity", str(min_read_perc_identity)
+            ]
+            subprocess.run(coverm_cmd, check=True)
+
+            # Run samtools depth
+            samtools_cmd = [
+                "samtools", "depth", "-a", temp_bam_name
+            ]
+            samtools_result = subprocess.run(samtools_cmd, capture_output=True, text=True, check=True)
+
+            # Read output to pandas DataFrame
+            # samtools depth output: chrom pos depth (tabgescheiden)
+            depth_df = pd.read_csv(io.StringIO(samtools_result.stdout), sep='\t', header=None, names=['chrom', 'pos', 'depth'])
+
+            logging.debug(f"depth_df['depth'].mean(): {depth_df['depth'].mean()}")
+
+            depth_df.drop(columns="pos", inplace=True)
+            raw_depth_df = pd.DataFrame(depth_df.groupby(by="chrom").apply(_get_depth_IQM)).reset_index()
+            
+            bam_filename = os.path.basename(bam_file)
+            sample_name = "_".join(bam_filename.split('_')[0:2])
+
+            raw_depth_df.columns = ["sequence", sample_name]
+
+            raw_depth_dfs.append(raw_depth_df)
+
+            
+
+        finally:
+            # Delete temp BAM file
+            if os.path.exists(temp_bam_name):
+                os.remove(temp_bam_name)
+
+    raw_depth_df = reduce(lambda left, right: pd.merge(left, right, on="sequence", how="outer"), raw_depth_dfs)
+    raw_depth_df.set_index("sequence", inplace=True)
+
+    return raw_depth_df
 
 def _perform_mc_simulation_for_sample(args):
     """Helper function to run MC simulation for a single sample in a separate process."""
