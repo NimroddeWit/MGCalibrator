@@ -4,16 +4,16 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 import logging
-from .processor import compute_absolute_abundance, compute_absolute_abundance_with_error
+from .processor import compute_absolute_abundance_with_error
 from .fileutils import list_bam_files
 
 def main():
     parser = argparse.ArgumentParser(description="MGCalibrator - calculate absolute abundances with standard error")
     parser.add_argument("--counts", required=True, help="CSV file with counts")
-    parser.add_argument("--meta", required=True, help="CSV file with concentrations")
-    #parser.add_argument("--DNA_mass", required=True, help="CSV file with measured DNA mass (ng)") This change will be implemented later
+    #parser.add_argument("--meta", required=True, help="CSV file with concentrations")
+    parser.add_argument("--dna_mass", required=True, help="CSV file with measured DNA mass (ng)") 
     parser.add_argument("--output", required=True, help="Output CSV file")
-    parser.add_argument("--volume", type=float, required=True, help="DNA volume (microL), used for all samples")
+    #parser.add_argument("--volume", type=float, required=True, help="DNA volume (microL), used for all samples")
     #parser.add_argument("--fastq_folder", required=True, help="Folder containing sequence files (mandatory)")
     parser.add_argument("--bam_folder", required=True, help="Folder containing BAM files (mandatory)")
     parser.add_argument("--extensions", nargs='*', default=[".sorted.bam", ".sort.bam"], 
@@ -67,16 +67,18 @@ def main():
     logging.info(f"Found {len(bam_files)} BAM files.")
 
     counts = pd.read_csv(args.counts, index_col=0).T
-    meta = pd.read_csv(args.meta)
-    dna_conc = dict(zip(meta.sample_id, meta.DNA_conc))
-    volume = {sample: float(args.volume) for sample in meta.sample_id}
+    #meta = pd.read_csv(args.meta)
+    #dna_conc = dict(zip(meta.sample_id, meta.DNA_conc))
+    #volume = {sample: float(args.volume) for sample in meta.sample_id}
+    dna_mass_df = pd.read_csv(args.dna_mass)
+    dna_mass = dict(zip(dna_mass_df.sample_id, dna_mass_df.DNA_mass))
 
     if args.error_bars:
         logging.info(f"Calculating 95% confidence intervals with {args.mc_samples} Monte Carlo samples...")
         logging.info(f"Using Dirichlet prior with alpha={args.alpha}")
         
         absolute, lower_ci, upper_ci, zero_replaced, scaling_factors = compute_absolute_abundance_with_error(
-            counts, dna_conc, volume, bam_files,
+            counts, dna_mass, bam_files,
             n_monte_carlo=args.mc_samples,
             alpha=args.alpha,
             n_workers=args.threads
@@ -109,28 +111,28 @@ def main():
             )
             logging.info(f"  - Plots saved: {plot_output_base}_*.{args.plot_format}")
         
-    else:
-        absolute, scaling_factors = compute_absolute_abundance(counts, dna_conc, volume, bam_files, n_workers=args.threads)
+    # else:
+    #     absolute, scaling_factors = compute_absolute_abundance(counts, dna_conc, volume, bam_files, n_workers=args.threads)
         
-        # Create simple consolidated output without confidence intervals but with scaling factors
-        consolidated_df = create_simple_consolidated_output(counts, absolute, scaling_factors)
-        consolidated_df.to_csv(args.output)
+    #     # Create simple consolidated output without confidence intervals but with scaling factors
+    #     consolidated_df = create_simple_consolidated_output(counts, absolute, scaling_factors)
+    #     consolidated_df.to_csv(args.output)
         
-        # Save scaling factors separately
-        scaling_factors_output = args.output.replace('.csv', '_scaling_factors.csv')
-        scaling_factors_df = pd.DataFrame([scaling_factors], index=['scaling_factor'])
-        scaling_factors_df.to_csv(scaling_factors_output)
+    #     # Save scaling factors separately
+    #     scaling_factors_output = args.output.replace('.csv', '_scaling_factors.csv')
+    #     scaling_factors_df = pd.DataFrame([scaling_factors], index=['scaling_factor'])
+    #     scaling_factors_df.to_csv(scaling_factors_output)
         
-        logging.info(f"Absolute abundances saved to: {args.output}")
-        logging.info(f"Scaling factors saved to: {scaling_factors_output}")
+    #     logging.info(f"Absolute abundances saved to: {args.output}")
+    #     logging.info(f"Scaling factors saved to: {scaling_factors_output}")
         
-        # Generate plots if requested
-        if args.plot:
-            plot_output_base = args.output.replace('.csv', '')
-            plot_absolute_abundances_simple(
-                counts, absolute, plot_output_base, args.top_features, args.plot_format, args.figsize
-            )
-            logging.info(f"  - Plots saved: {plot_output_base}_*.{args.plot_format}")
+    #     # Generate plots if requested
+    #     if args.plot:
+    #         plot_output_base = args.output.replace('.csv', '')
+    #         plot_absolute_abundances_simple(
+    #             counts, absolute, plot_output_base, args.top_features, args.plot_format, args.figsize
+    #         )
+    #         logging.info(f"  - Plots saved: {plot_output_base}_*.{args.plot_format}")
 
 def create_consolidated_output(counts_df, absolute_df, lower_ci_df, upper_ci_df, zero_replaced_df, scaling_factors):
     """

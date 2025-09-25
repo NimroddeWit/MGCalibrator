@@ -5,42 +5,42 @@ import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from .parser import calculate_total_base_pairs
 
-def compute_absolute_abundance(counts_df, dna_conc, volume, bam_files, n_workers=None):
-    """
-    Compute absolute abundance by scaling raw counts with a scaling factor.
+# def compute_absolute_abundance(counts_df, dna_conc, volume, bam_files, n_workers=None):
+#     """
+#     Compute absolute abundance by scaling raw counts with a scaling factor.
     
-    Formula: absolute_abundance = raw_counts * scaling_factor
-    Where: scaling_factor = initial_dna_weight / final_dna_weight
-           initial_dna_weight = dna_conc * volume
-           final_dna_weight = calculated from base pairs in BAM files
-    """
-    if not bam_files:
-        raise ValueError("BAM files are required to calculate DNA weight from base pairs")
+#     Formula: absolute_abundance = raw_counts * scaling_factor
+#     Where: scaling_factor = initial_dna_weight / final_dna_weight
+#            initial_dna_weight = dna_conc * volume
+#            final_dna_weight = calculated from base pairs in BAM files
+#     """
+#     if not bam_files:
+#         raise ValueError("BAM files are required to calculate DNA weight from base pairs")
     
-    # Calculate initial DNA weight for each sample
-    initial_dna_weight = {sample: dna_conc[sample] * volume[sample] for sample in counts_df.columns}
+#     # Calculate initial DNA weight for each sample
+#     initial_dna_weight = {sample: dna_conc[sample] * volume[sample] for sample in counts_df.columns}
     
-    # Calculate final DNA weight from BAM files
-    sample_base_pairs = calculate_total_base_pairs(bam_files, n_workers=n_workers)
-    # Convert base pairs to DNA weight (assuming average molecular weight per base pair)
-    # Using approximately 650 Da per base pair (average of A, T, G, C)
-    # 1 Da = 1.66054e-15 ng, so 650 Da = 1.079e-12 ng per base pair
-    final_dna_weight = {sample: sample_base_pairs.get(sample, 0) * 1.079e-12  # Convert to ng
-                       for sample in counts_df.columns}
+#     # Calculate final DNA weight from BAM files
+#     sample_base_pairs = calculate_total_base_pairs(bam_files, n_workers=n_workers)
+#     # Convert base pairs to DNA weight (assuming average molecular weight per base pair)
+#     # Using approximately 650 Da per base pair (average of A, T, G, C)
+#     # 1 Da = 1.66054e-15 ng, so 650 Da = 1.079e-12 ng per base pair
+#     final_dna_weight = {sample: sample_base_pairs.get(sample, 0) * 1.079e-12  # Convert to ng
+#                        for sample in counts_df.columns}
     
-    # Check for samples with no BAM data
-    for sample in counts_df.columns:
-        if final_dna_weight[sample] == 0:
-            raise ValueError(f"No base pairs found for sample {sample} in BAM files")
+#     # Check for samples with no BAM data
+#     for sample in counts_df.columns:
+#         if final_dna_weight[sample] == 0:
+#             raise ValueError(f"No base pairs found for sample {sample} in BAM files")
     
-    # Calculate scaling factors
-    scaling_factors = {sample: initial_dna_weight[sample] / final_dna_weight[sample] 
-                      for sample in counts_df.columns}
+#     # Calculate scaling factors
+#     scaling_factors = {sample: initial_dna_weight[sample] / final_dna_weight[sample] 
+#                       for sample in counts_df.columns}
     
-    logging.info(f"Calculated scaling factors: {scaling_factors}")
+#     logging.info(f"Calculated scaling factors: {scaling_factors}")
     
-    absolute = counts_df.multiply(pd.Series(scaling_factors))
-    return absolute, scaling_factors
+#     absolute = counts_df.multiply(pd.Series(scaling_factors))
+#     return absolute, scaling_factors
 
 def _perform_mc_simulation_for_sample(args):
     """Helper function to run MC simulation for a single sample in a separate process."""
@@ -88,7 +88,7 @@ def _perform_mc_simulation_for_sample(args):
     
     return sample_idx, sampled_absolute
 
-def compute_absolute_abundance_with_error(counts_df, dna_conc, volume, bam_files,
+def compute_absolute_abundance_with_error(counts_df, dna_mass, bam_files,
                                         n_monte_carlo=1000,
                                         alpha=0.5,
                                         n_workers=None):
@@ -115,10 +115,8 @@ def compute_absolute_abundance_with_error(counts_df, dna_conc, volume, bam_files
     -----------
     counts_df : pd.DataFrame
         DataFrame with features (genes/taxa) as rows and samples as columns
-    dna_conc : dict
-        Dictionary mapping sample names to DNA concentrations
-    volume : dict
-        Dictionary mapping sample names to volumes
+    dna_mass : dict
+        Dictionary mapping sample names to DNA mass (ng)
     bam_files : list
         List of BAM files to calculate final DNA weight (mandatory)
     n_monte_carlo : int
@@ -141,16 +139,16 @@ def compute_absolute_abundance_with_error(counts_df, dna_conc, volume, bam_files
         raise ValueError("BAM files are required to calculate DNA weight from base pairs")
 
     # Calculate initial DNA weight for each sample
-    initial_dna_weight = {sample: dna_conc[sample] * volume[sample] for sample in counts_df.columns}
+    initial_dna_weight = dna_mass
 
     # Calculate final DNA weight from BAM files
     sample_base_pairs = calculate_total_base_pairs(bam_files, n_workers=n_workers)
     final_dna_weight = {sample: sample_base_pairs.get(sample, 0) * 1.079e-12  # Convert to ng
                        for sample in counts_df.columns}
-    logging.debug("sample_base_pairs:", sample_base_pairs)
-    logging.debug("counts_df.columns:", counts_df.columns)
-    logging.debug("final_dna_weight:", final_dna_weight)
-    
+    logging.debug(f"sample_base_pairs: {sample_base_pairs}")
+    logging.debug(f"counts_df.columns: {counts_df.columns}")
+    logging.debug(f"final_dna_weight: {final_dna_weight}")
+
     # Check for samples with no BAM data
     for sample in counts_df.columns:
         if final_dna_weight[sample] == 0:

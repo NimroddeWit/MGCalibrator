@@ -33,3 +33,4 @@
 
 build/*
 MGCalibrator.egg-info/*
+MGCalibrator/__pycache__/*
