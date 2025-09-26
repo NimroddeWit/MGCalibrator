@@ -13,9 +13,15 @@ def _get_depth_IQM(depth_list):
     quartile_range = len(depth_list) // 4
     return np.mean(np.sort(depth_list)[quartile_range:-quartile_range])
 
-def compute_raw_depths(bam_files, min_read_perc_identity=97):
+# def _get_depth_PG(depth_list):
+#     <insert christians code here...>
+#     return 
+
+def compute_raw_depths(bam_files, min_read_perc_identity=97, depth_calculation_method="IQM"):
     """Some description here..."""
     
+    logging.debug(f"Raw depths are calculated using the {depth_calculation_method} method")
+
     raw_depth_dfs = []
     
     for bam_file in bam_files:
@@ -45,8 +51,17 @@ def compute_raw_depths(bam_files, min_read_perc_identity=97):
 
             logging.debug(f"depth_df['depth'].mean(): {depth_df['depth'].mean()}")
 
-            # Group by sequences
-            raw_depth_df = pd.DataFrame(depth_df.groupby(by="sequence").apply(_get_depth_IQM)).reset_index()
+            # Group by sequences and apply depth calculation
+            # Interquartile mean
+            if depth_calculation_method == "IQM":
+                raw_depth_df = pd.DataFrame(depth_df.groupby(by="sequence").apply(_get_depth_IQM)).reset_index()
+            # Median    
+            elif depth_calculation_method == "M":
+                raw_depth_df = pd.DataFrame(depth_df.groupby(by="sequence").apply(np.median)).reset_index()
+            # Poisson-Gamma
+            # elif depth_calculation_method == "PG":
+            #     raw_depth_df = pd.DataFrame(depth_df.groupby(by="sequence").apply(_get_depth_PG)).reset_index()
+
             
             # Set sample name as column name
             bam_filename = os.path.basename(bam_file)
@@ -63,6 +78,7 @@ def compute_raw_depths(bam_files, min_read_perc_identity=97):
     # Combine all raw_depth dataframes into single dataframe and set sequences to index
     raw_depth_df = reduce(lambda left, right: pd.merge(left, right, on="sequence", how="outer"), raw_depth_dfs)
     raw_depth_df.set_index("sequence", inplace=True)
+    raw_depth_df.fillna(0, inplace=True)
 
     return raw_depth_df
 
@@ -90,6 +106,7 @@ def _perform_mc_simulation_for_sample(args):
         sampled_absolute = (sampled_counts * scaling_factor).reshape(-1, 1)
         
         logging.debug(f"Finished MC simulation for single-feature sample: {sample_name}")
+
         return sample_idx, sampled_absolute
 
     # --- Standard multi-feature case ---
@@ -174,7 +191,7 @@ def compute_absolute_abundance_with_error(counts_df, dna_mass, bam_files, scalin
         scaling_factors = scaling_factors_loaded_dict
 
         logging.debug(f"Scaling factors are loaded from file.")
-        
+
     else:
         if not bam_files:
             raise ValueError("BAM files are required to calculate DNA weight from base pairs")
@@ -186,6 +203,7 @@ def compute_absolute_abundance_with_error(counts_df, dna_mass, bam_files, scalin
         sample_base_pairs = calculate_total_base_pairs(bam_files, n_workers=n_workers)
         final_dna_weight = {sample: sample_base_pairs.get(sample, 0) * 1.079e-12  # Convert to ng
                         for sample in counts_df.columns}
+        
         logging.debug(f"sample_base_pairs: {sample_base_pairs}")
         logging.debug(f"counts_df.columns: {counts_df.columns}")
         logging.debug(f"final_dna_weight: {final_dna_weight}")
@@ -204,7 +222,8 @@ def compute_absolute_abundance_with_error(counts_df, dna_mass, bam_files, scalin
             for key, value in scaling_factors.items():
                 file.write(f"{key}: {value}\n")
 
-    logging.info(f"Calculated scaling factors: {scaling_factors}")
+        logging.info(f"Calculated scaling factors: {scaling_factors}")
+
     logging.info(f"Note: Samples with higher scaling factors will have proportionally larger confidence intervals")
     logging.info(f"Using Dirichlet prior for Monte Carlo sampling with alpha={alpha}")
 
@@ -236,6 +255,8 @@ def compute_absolute_abundance_with_error(counts_df, dna_mass, bam_files, scalin
             )
             tasks.append(task_args)
 
+        logging.debug(f"tasks: {tasks}")
+        
         # Submit tasks and collect results
         futures = [executor.submit(_perform_mc_simulation_for_sample, task) for task in tasks]
         

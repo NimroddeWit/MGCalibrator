@@ -10,6 +10,8 @@ from .fileutils import list_bam_files
 
 def main():
     parser = argparse.ArgumentParser(description="MGCalibrator - calculate absolute abundances with standard error")
+    
+    # Input/output options
     parser.add_argument("--bam_folder", required=True, help="Folder containing BAM files")
     parser.add_argument("--extensions", nargs='*', default=[".sorted.bam", ".sort.bam"], 
                         help="List of sequence file extensions to search for (default: .sorted.bam, .sort.bam)")
@@ -22,6 +24,11 @@ def main():
     # Performance options
     parser.add_argument("--threads", type=int, default=None,
                         help="Number of threads to use for parallel processing (default: all available cores)")
+    
+    # Depth calculation options
+    parser.add_argument("--depth_method", default="IQM",
+                        help="Method to use for raw_depth calculation. IQM: InterQuartile Mean, M: Median, PG: Poisson-Gamma (default: IQM)") 
+    parser.add_argument("--perc_ident", default=97, help="Minimal mapping identity (%) for calculating depth")
     
     # Error propagation options
     parser.add_argument("--mc_samples", type=int, default=1000, 
@@ -49,34 +56,39 @@ def main():
     logging.info("Starting MGCalibrator run")
     logging.info(f"Using up to {args.threads or 'all available'} threads.")
 
+    # Get list of BAM files
     bam_files = list_bam_files(
         folder=args.bam_folder,
         extensions=args.extensions,
         suffixes=args.suffixes,
     )
-    
     if not bam_files:
         raise ValueError(f"No BAM files found in {args.bam_folder} with specified extensions.")
     
     logging.info(f"Found {len(bam_files)} BAM files.")
 
+    # Get variables from arguments
     dna_mass_df = pd.read_csv(args.dna_mass)
     dna_mass = dict(zip(dna_mass_df.sample_id, dna_mass_df.DNA_mass))
+    depth_calculation_method = args.depth_method
+    min_read_perc_identity = args.perc_ident
     scaling_factors_dict = args.scaling_factors
     raw_depths_csv = args.raw_depths
 
     logging.info(f"Calculating 95% confidence intervals with {args.mc_samples} Monte Carlo samples...")
     logging.info(f"Using Dirichlet prior with alpha={args.alpha}")
-    
+
+    # Obtain raw_depths    
     if os.path.exists(raw_depths_csv):
         raw_depths = pd.read_csv(raw_depths_csv, index_col=0)
         logging.debug(f"Raw depths are loaded from file.")
     else:
-        raw_depths = compute_raw_depths(bam_files)
+        raw_depths = compute_raw_depths(bam_files, min_read_perc_identity, depth_calculation_method)
         raw_depths.to_csv(raw_depths_csv)
 
     logging.debug(f"raw_depths: {raw_depths}")
 
+    # Compute absolute abundances
     absolute, lower_ci, upper_ci, zero_replaced, scaling_factors = compute_absolute_abundance_with_error(
         raw_depths, dna_mass, bam_files, scaling_factors_dict,
         n_monte_carlo=args.mc_samples,
