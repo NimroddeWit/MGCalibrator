@@ -173,6 +173,8 @@ def compute_absolute_abundance_with_error(counts_df, dna_mass, bam_files, scalin
         
         scaling_factors = scaling_factors_loaded_dict
 
+        logging.debug(f"Scaling factors are loaded from file.")
+        
     else:
         if not bam_files:
             raise ValueError("BAM files are required to calculate DNA weight from base pairs")
