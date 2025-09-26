@@ -112,7 +112,7 @@ def _perform_mc_simulation_for_sample(args):
     
     return sample_idx, sampled_absolute
 
-def compute_absolute_abundance_with_error(counts_df, dna_mass, bam_files,
+def compute_absolute_abundance_with_error(counts_df, dna_mass, bam_files, scaling_factors_dict,
                                         n_monte_carlo=1000,
                                         alpha=0.5,
                                         n_workers=None):
@@ -159,28 +159,48 @@ def compute_absolute_abundance_with_error(counts_df, dna_mass, bam_files,
         - zero_replaced_counts: DataFrame with posterior mean counts for transparency
         - scaling_factors: Dictionary of scaling factors for each sample
     """
-    if not bam_files:
-        raise ValueError("BAM files are required to calculate DNA weight from base pairs")
 
-    # Calculate initial DNA weight for each sample
-    initial_dna_weight = dna_mass
+    if os.path.exists(scaling_factors_dict):
+        # Load the dictionary from a text file
+        scaling_factors_loaded_dict = {}
 
-    # Calculate final DNA weight from BAM files
-    sample_base_pairs = calculate_total_base_pairs(bam_files, n_workers=n_workers)
-    final_dna_weight = {sample: sample_base_pairs.get(sample, 0) * 1.079e-12  # Convert to ng
-                       for sample in counts_df.columns}
-    logging.debug(f"sample_base_pairs: {sample_base_pairs}")
-    logging.debug(f"counts_df.columns: {counts_df.columns}")
-    logging.debug(f"final_dna_weight: {final_dna_weight}")
+        with open(scaling_factors_dict, "r") as file:
+            for line in file:
+                # Strip any extra whitespace and split the line into key and value
+                key, value = line.strip().split(": ", 1)
 
-    # Check for samples with no BAM data
-    for sample in counts_df.columns:
-        if final_dna_weight[sample] == 0:
-            raise ValueError(f"No base pairs found for sample {sample} in BAM files")
+                scaling_factors_loaded_dict[key] = float(value)
+        
+        scaling_factors = scaling_factors_loaded_dict
 
-    # Calculate scaling factors
-    scaling_factors = {sample: initial_dna_weight[sample] / final_dna_weight[sample]
-                      for sample in counts_df.columns}
+    else:
+        if not bam_files:
+            raise ValueError("BAM files are required to calculate DNA weight from base pairs")
+
+        # Calculate initial DNA weight for each sample
+        initial_dna_weight = dna_mass
+
+        # Calculate final DNA weight from BAM files
+        sample_base_pairs = calculate_total_base_pairs(bam_files, n_workers=n_workers)
+        final_dna_weight = {sample: sample_base_pairs.get(sample, 0) * 1.079e-12  # Convert to ng
+                        for sample in counts_df.columns}
+        logging.debug(f"sample_base_pairs: {sample_base_pairs}")
+        logging.debug(f"counts_df.columns: {counts_df.columns}")
+        logging.debug(f"final_dna_weight: {final_dna_weight}")
+
+        # Check for samples with no BAM data
+        for sample in counts_df.columns:
+            if final_dna_weight[sample] == 0:
+                raise ValueError(f"No base pairs found for sample {sample} in BAM files")
+
+        # Calculate scaling factors
+        scaling_factors = {sample: initial_dna_weight[sample] / final_dna_weight[sample]
+                        for sample in counts_df.columns}
+
+        # Save it to a file in the expected format:
+        with open(scaling_factors_dict, "w") as file:
+            for key, value in scaling_factors.items():
+                file.write(f"{key}: {value}\n")
 
     logging.info(f"Calculated scaling factors: {scaling_factors}")
     logging.info(f"Note: Samples with higher scaling factors will have proportionally larger confidence intervals")

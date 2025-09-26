@@ -9,11 +9,13 @@ from .fileutils import list_bam_files
 
 def main():
     parser = argparse.ArgumentParser(description="MGCalibrator - calculate absolute abundances with standard error")
-    parser.add_argument("--bam_folder", required=True, help="Folder containing BAM files (mandatory)")
+    parser.add_argument("--bam_folder", required=True, help="Folder containing BAM files")
     parser.add_argument("--extensions", nargs='*', default=[".sorted.bam", ".sort.bam"], 
                         help="List of sequence file extensions to search for (default: .sorted.bam, .sort.bam)")
     parser.add_argument("--suffixes", nargs="*", help="List of suffixes to filter in files")
     parser.add_argument("--dna_mass", required=True, help="CSV file with measured DNA mass (ng)") 
+    parser.add_argument("--scaling_factors", required=True, help="Dictionary containing calculated scaling factors (loaded when file exists)")
+    #parser.add_argument("--raw_depths", required=True, help="CSV file containing calculated raw depths (loaded when file exists)")
     parser.add_argument("--output", required=True, help="Output CSV file")
     
     # Performance options
@@ -59,6 +61,7 @@ def main():
 
     dna_mass_df = pd.read_csv(args.dna_mass)
     dna_mass = dict(zip(dna_mass_df.sample_id, dna_mass_df.DNA_mass))
+    scaling_factors_dict = args.scaling_factors
 
     logging.info(f"Calculating 95% confidence intervals with {args.mc_samples} Monte Carlo samples...")
     logging.info(f"Using Dirichlet prior with alpha={args.alpha}")
@@ -68,7 +71,7 @@ def main():
     logging.debug(f"raw_depths: {raw_depths}")
 
     absolute, lower_ci, upper_ci, zero_replaced, scaling_factors = compute_absolute_abundance_with_error(
-        raw_depths, dna_mass, bam_files,
+        raw_depths, dna_mass, bam_files, scaling_factors_dict,
         n_monte_carlo=args.mc_samples,
         alpha=args.alpha,
         n_workers=args.threads
