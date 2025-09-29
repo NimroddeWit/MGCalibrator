@@ -17,7 +17,7 @@ def _get_depth_IQM(depth_list):
 #     <insert christians code here...>
 #     return 
 
-def compute_raw_depths(bam_files, min_read_perc_identity=97, depth_calculation_method="IQM"):
+def compute_raw_depths(bam_files, min_read_perc_identity=97, depth_calculation_method="IQM", reference_bins_csv=None):
     """Some description here..."""
     
     logging.debug(f"Raw depths are calculated using the {depth_calculation_method} method")
@@ -40,7 +40,8 @@ def compute_raw_depths(bam_files, min_read_perc_identity=97, depth_calculation_m
 
             # Run samtools depth
             samtools_cmd = [
-                "samtools", "depth", "-a", temp_bam_name
+                # Use argument -aa to include all references in the depth file, also references without any reads mapped to them
+                "samtools", "depth", "-aa", temp_bam_name
             ]
             samtools_result = subprocess.run(samtools_cmd, capture_output=True, text=True, check=True)
 
@@ -50,6 +51,16 @@ def compute_raw_depths(bam_files, min_read_perc_identity=97, depth_calculation_m
             depth_df.drop(columns="pos", inplace=True)
 
             logging.debug(f"depth_df['depth'].mean(): {depth_df['depth'].mean()}")
+
+            # Bin reference sequences
+            if reference_bins_csv:
+                reference_bins_df = pd.read_csv(reference_bins_csv)
+                reference_bins = dict(zip(reference_bins_df.iloc[:, 0], reference_bins_df.iloc[:, 1]))
+
+                try:
+                    depth_df["sequence"] = depth_df["sequence"].apply(lambda x: reference_bins[x])
+                except Exception as exc:
+                    logging.error(f"Applying reference bins failed: {exc}")
 
             # Group by sequences and apply depth calculation
             # Interquartile mean
@@ -61,7 +72,6 @@ def compute_raw_depths(bam_files, min_read_perc_identity=97, depth_calculation_m
             # Poisson-Gamma
             # elif depth_calculation_method == "PG":
             #     raw_depth_df = pd.DataFrame(depth_df.groupby(by="sequence").apply(_get_depth_PG)).reset_index()
-
             
             # Set sample name as column name
             bam_filename = os.path.basename(bam_file)

@@ -16,6 +16,7 @@ def main():
     parser.add_argument("--extensions", nargs='*', default=[".sorted.bam", ".sort.bam"], 
                         help="List of sequence file extensions to search for (default: .sorted.bam, .sort.bam)")
     parser.add_argument("--suffixes", nargs="*", help="List of suffixes to filter in files")
+    parser.add_argument("--reference_bins", help="CSV file indicating to which bin belongs each reference sequence")
     parser.add_argument("--dna_mass", required=True, help="CSV file with measured DNA mass (ng)") 
     parser.add_argument("--scaling_factors", required=True, help="Dictionary containing calculated scaling factors (loaded when file exists)")
     parser.add_argument("--raw_depths", required=True, help="CSV file containing calculated raw depths (loaded when file exists)")
@@ -71,6 +72,7 @@ def main():
     dna_mass_df = pd.read_csv(args.dna_mass)
     dna_mass = dict(zip(dna_mass_df.sample_id, dna_mass_df.DNA_mass))
     depth_calculation_method = args.depth_method
+    reference_bins_csv = args.reference_bins
     min_read_perc_identity = args.perc_ident
     scaling_factors_dict = args.scaling_factors
     raw_depths_csv = args.raw_depths
@@ -83,7 +85,7 @@ def main():
         raw_depths = pd.read_csv(raw_depths_csv, index_col=0)
         logging.debug(f"Raw depths are loaded from file.")
     else:
-        raw_depths = compute_raw_depths(bam_files, min_read_perc_identity, depth_calculation_method)
+        raw_depths = compute_raw_depths(bam_files, min_read_perc_identity, depth_calculation_method, reference_bins_csv)
         raw_depths.to_csv(raw_depths_csv)
 
     logging.debug(f"raw_depths: {raw_depths}")
