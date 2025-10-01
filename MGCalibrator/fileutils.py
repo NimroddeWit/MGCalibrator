@@ -34,11 +34,5 @@ def list_bam_files(folder, extensions=None, suffixes=None, singleton_files=None)
             if any(fn_no_ext.endswith(s) for s in suffixes):
                 filtered_files.append(f)
         files = filtered_files
-
-    # Add any singleton files
-    # if singleton_files:
-    #     files.extend(singleton_files)
-    #     # Ensure final list is unique and sorted
-    #     files = sorted(list(set(files)))
         
     return files

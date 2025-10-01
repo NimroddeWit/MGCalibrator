@@ -1,5 +1,4 @@
 import os
-import gzip
 import logging
 import pysam
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -31,23 +30,6 @@ def fast_count_base_pairs(filepath):
 
     bamfile.close()
     print(f"Total bases (primary + unmapped): {total_bp}")
-    
-    # total_bp = 0
-    # is_fastq = any(filepath.endswith(ext) for ext in ['.fastq', '.fq', '.fastq.gz', '.fq.gz', '.fastq.gzip', '.fq.gzip'])
-    
-    # open_func = gzip.open if filepath.endswith((".gz", ".gzip")) else open
-    
-    # with open_func(filepath, "rt") as handle:
-    #     if is_fastq:
-    #         # For FASTQ files, the sequence is every 4th line, starting from the 2nd
-    #         for i, line in enumerate(handle):
-    #             if i % 4 == 1:
-    #                 total_bp += len(line.strip())
-    #     else: # Assumes FASTA
-    #         # For FASTA files, count lines that don't start with '>'
-    #         for line in handle:
-    #             if not line.startswith('>'):
-    #                 total_bp += len(line.strip())
                     
     return total_bp
 

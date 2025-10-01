@@ -1,10 +1,10 @@
-# Absolutifier
+# MGCalibrator
 
-Raw feature counts from metagenomic sequencing are not directly comparable across samples due to variations in sequencing depth and initial DNA input. `Absolutifier` addresses this by converting raw counts into **absolute abundances**.
+Raw feature counts from metagenomic sequencing are not directly comparable across samples due to variations in sequencing depth and initial DNA input. `MGCalibrator` addresses this by converting raw counts into **absolute abundances**.
 
-The tool works by calculating a sample-specific scaling factor based on the total DNA weight (concentration × volume) present *before* sequencing. This scaling factor is used to *absolutify* the raw counts, allowing for valid simulation of scale across samples.`Absolutifier` estimates uncertainty in these absolute abundances by adding a pseudocount to the observed counts and then drawing Monte Carlo samples from a Dirichlet distribution and provides a measure of error (95% confidence intervals for each feature).
+The tool works by calculating a sample-specific scaling factor based on the total DNA weight present *before* sequencing (in ng, as determined by, e.g., Qubit HS). This scaling factor is used to calibrate the raw counts, allowing for valid simulation of scale across samples.`MGCalibrator` estimates uncertainty in these absolute abundances by adding a pseudocount to the observed counts and then drawing Monte Carlo samples from a Dirichlet distribution and provides a measure of error (95% confidence intervals for each feature).
 
-`Absolutifier` works with any type of biological features: **taxa, genes, functional categories, etc.**
+`MGCalibrator` works with any type of biological features: **taxa, genes, functional categories, etc.**
 
 ---
 
@@ -28,7 +28,7 @@ pip install .
 
 ## ▶️ Example Usage
 
-Run Absolutifier with:
+Run Absolutifier with [NEEDS UPDATE]:
 
 ```bash
 absolutifier \
@@ -41,7 +41,7 @@ absolutifier \
   --extension .fastq
 ```
 
-### Explanation of Parameters
+### Explanation of Parameters [NEEDS UPDATE]
 
 | **Flag**         | **Description**                                                                 |
 |------------------|---------------------------------------------------------------------------------|
@@ -63,7 +63,13 @@ absolutifier \
 
 ---
 
-## 🧪 Input Format Example
+## Input prerequisites
+
+- Input bam filenames should be in this format: `sample_1_....sorted.bam`
+- `reference_bins.csv` file should have a header (content of header does not matter), and all reference sequences used should be present in the first column (this last part will be changed, making it more flexible)
+- `dna_mass.csv` should contain `sample_id` and `DNA_mass` as headers, and sample_id column should contain all samples that are also present in the input directory
+
+## 🧪 Input Format Example [NEEDS UPDATE]
 
 **counts.csv**:
 
