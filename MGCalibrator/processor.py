@@ -10,8 +10,17 @@ from functools import reduce
 from .parser import calculate_total_base_pairs
 
 def _get_depth_IQM(depth_list):
-    quartile_range = len(depth_list) // 4
-    return np.mean(np.sort(depth_list)[quartile_range:-quartile_range])
+    depths = np.array(depth_list)
+
+    q1 = np.percentile(depths, 25)
+    q3 = np.percentile(depths, 75)
+    
+    # Select IQR
+    iqr_depths = depths[(depths >= q1) & (depths <= q3)]
+    
+    iqm = np.mean(iqr_depths)
+    
+    return iqm
 
 # def _get_depth_PG(depth_list):
 #     <insert christians code here...>
