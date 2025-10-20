@@ -65,8 +65,8 @@ absolutifier \
 
 ## Input prerequisites
 
-- Input bam filenames should be in this format: `sample_1_....sorted.bam`
-- `reference_bins.csv` file should have a header (content of header does not matter), and all reference sequences used should be present in the first column (this last part will be changed, making it more flexible)
+- Input bam filenames should be in this format: `sample_1_(...).sorted.bam`
+- `reference_bins.csv` file should have a header (content of header does not matter), and bin names should be different than any of the individual reference names
 - `dna_mass.csv` should contain `sample_id` and `DNA_mass` as headers, and sample_id column should contain all samples that are also present in the input directory
 
 ## 🧪 Input Format Example [NEEDS UPDATE]
