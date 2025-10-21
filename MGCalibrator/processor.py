@@ -6,7 +6,7 @@ import subprocess
 import io
 import tempfile
 import pysam
-from concurrent.futures import ProcessPoolExecutor, as_completed
+import concurrent.futures
 from functools import reduce
 from .parser import calculate_total_base_pairs
 
@@ -206,6 +206,65 @@ def MC_simulation_for_IQM_depth(depths, reads, n_simulations=1000, pseudocount=1
 
     return iqm_mean, iqm_lower_ci, iqm_upper_ci
 
+def process_bam_file(bam_file, reference_bins_csv, n_simulations, pseudocount, batch_size):
+    sample_name = os.path.basename(bam_file)
+    depth_dict = get_depth_dict_with_samtools(bam_file)
+    reads_dict = get_reads_dict_from_bam(bam_file)
+
+    logging.info(f"Reads_dict and depth_dict created for {sample_name}")
+
+    if reference_bins_csv:
+        num_refs_before = len(reads_dict.keys())
+        reads_dict, depth_dict = apply_binning_to_dicts(reads_dict, depth_dict, bam_file, reference_bins_csv)
+        num_refs_after = len(reads_dict.keys())
+
+        logging.info(f"Binning applied. Number of references: {num_refs_before} --> {num_refs_after}")
+
+    logging.info(f"Starting {n_simulations} MC simulations in batches of {batch_size} for {sample_name}...")
+
+    result_rows = []
+    for ref in reads_dict.keys():
+        if np.shape(reads_dict[ref])[0] > 0:
+            IQM_mean, IQM_lower_ci, IQM_upper_ci = MC_simulation_for_IQM_depth(
+                depth_dict[ref], reads_dict[ref], 
+                n_simulations=n_simulations, 
+                pseudocount=pseudocount, 
+                batch_size=batch_size)
+            result_rows.append({
+                "Sample": sample_name,
+                "Reference": ref,
+                "IQM_mean": IQM_mean,
+                "IQM_lower_ci": IQM_lower_ci,
+                "IQM_upper_ci": IQM_upper_ci
+            })
+        else:
+            result_rows.append({
+                "Sample": sample_name,
+                "Reference": ref,
+                "IQM_mean": 0,
+                "IQM_lower_ci": 0,
+                "IQM_upper_ci": 0,
+            })
+    
+    logging.info(f"Monte Carlo simulation for {sample_name} done.")
+
+    return result_rows
+
+def compute_raw_depths_with_error_parallel(
+    bam_files_filtered, reference_bins_csv=None, n_simulations=100, pseudocount=1, batch_size=500, n_jobs=4):
+
+    result_rows = []
+    with concurrent.futures.ProcessPoolExecutor(max_workers=n_jobs) as executor:
+        futures = []
+        for bam_file in bam_files_filtered:
+            futures.append(executor.submit(
+                process_bam_file, bam_file, reference_bins_csv, n_simulations, pseudocount, batch_size))
+        for future in concurrent.futures.as_completed(futures):
+            result_rows.extend(future.result())
+    raw_depths_df = pd.DataFrame(result_rows)
+
+    return raw_depths_df
+
 def compute_raw_depths_with_error(
         bam_files_filtered, reference_bins_csv=None, n_simulations=100, pseudocount=1, batch_size=500):
 
@@ -221,9 +280,13 @@ def compute_raw_depths_with_error(
         logging.info(f"Reads_dict and depth_dict created for {sample_name}")
 
         if reference_bins_csv:
+            num_refs_before = len(reads_dict.keys())
+            
             reads_dict, depth_dict = apply_binning_to_dicts(reads_dict, depth_dict, bam_file, reference_bins_csv)
             
-            logging.info(f"Binning applied.")
+            num_refs_after = len(reads_dict.keys())
+
+            logging.info(f"Binning applied. Number of references: {num_refs_before} --> {num_refs_after}")
         
         logging.info(f"Starting {n_simulations} MC simulations in batches of {batch_size} for {sample_name}...")
 

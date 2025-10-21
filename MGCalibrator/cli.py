@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import logging
 import os
-from .processor import run_coverm_filter, compute_raw_depths_with_error
+from .processor import run_coverm_filter, compute_raw_depths_with_error, compute_raw_depths_with_error_parallel
 from .fileutils import list_bam_files
 
 def main():
@@ -105,11 +105,18 @@ def main():
     
     logging.info(f"Start computing raw depths with errors...")
     
-    raw_depths_with_errors = compute_raw_depths_with_error(bam_files_filtered, 
-                                                           reference_bins_csv=reference_bins_csv, 
-                                                           n_simulations=args.mc_samples, 
-                                                           pseudocount=args.pseudocount,
-                                                           batch_size=args.batch_size)
+    # raw_depths_with_errors = compute_raw_depths_with_error(bam_files_filtered, 
+    #                                                        reference_bins_csv=reference_bins_csv, 
+    #                                                        n_simulations=args.mc_samples, 
+    #                                                        pseudocount=args.pseudocount,
+    #                                                        batch_size=args.batch_size)
+
+    raw_depths_with_errors = compute_raw_depths_with_error_parallel(bam_files_filtered, 
+                                                                    reference_bins_csv=reference_bins_csv, 
+                                                                    n_simulations=args.mc_samples, 
+                                                                    pseudocount=args.pseudocount,
+                                                                    batch_size=args.batch_size,
+                                                                    n_jobs=args.threads)
 
     raw_depths_with_errors.to_csv(args.output, index=False)
 
