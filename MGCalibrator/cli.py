@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import logging
 import os
-from .processor import run_coverm_filter, compute_raw_depths_with_error, compute_raw_depths_with_error_parallel
+from .processor import run_coverm_filter, compute_raw_depths_with_error, calculate_scaling_factors
 from .fileutils import list_bam_files
 
 def main():
@@ -19,7 +19,6 @@ def main():
     parser.add_argument("--reference_bins", help="CSV file indicating to which bin belongs each reference sequence")
     parser.add_argument("--dna_mass", required=True, help="CSV file with measured DNA mass (ng)") 
     parser.add_argument("--scaling_factors", required=True, help="Dictionary containing calculated scaling factors (loaded when file exists)")
-    parser.add_argument("--raw_depths", required=True, help="CSV file containing calculated raw depths (loaded when file exists)")
     parser.add_argument("--output", required=True, help="Output CSV file")
     
     # Performance options
@@ -27,8 +26,6 @@ def main():
                         help="Number of threads to use for parallel processing (default: all available cores)")
     
     # Depth calculation options
-    parser.add_argument("--depth_method", default="IQM",
-                        help="Method to use for raw_depth calculation. IQM: InterQuartile Mean, M: Median, PG: Poisson-Gamma (default: IQM)") 
     parser.add_argument("--perc_ident", default=97, help="Minimal mapping identity (%) for calculating depth")
     
     # Error propagation options
@@ -72,77 +69,61 @@ def main():
 
     # Get variables from arguments
     dna_mass_df = pd.read_csv(args.dna_mass)
-    dna_mass = dict(zip(dna_mass_df.sample_id, dna_mass_df.DNA_mass))
-    depth_calculation_method = args.depth_method
+    initial_dna_mass = dict(zip(dna_mass_df.sample_id, dna_mass_df.DNA_mass))
     reference_bins_csv = args.reference_bins
     min_read_perc_identity = args.perc_ident
     scaling_factors_dict = args.scaling_factors
-    raw_depths_csv = args.raw_depths
     output_dir = os.path.dirname(args.output)
 
-    # Obtain raw_depths    
-    # if os.path.exists(raw_depths_csv):
-    #     raw_depths = pd.read_csv(raw_depths_csv, index_col=0)
-    #     logging.debug(f"Raw depths are loaded from file.")
-    # else:
-    #     raw_depths = compute_raw_depths(bam_files, min_read_perc_identity, depth_calculation_method, reference_bins_csv)
-    #     raw_depths.to_csv(raw_depths_csv)
-
     # Filter BAM files
-    
     logging.info(f"Filtering BAM files with {min_read_perc_identity}% identity...")
     
     bam_files_filtered = run_coverm_filter(bam_files, min_read_perc_identity, output_dir)
     
     logging.info(f"Filtering completed.")
 
-    # Functie die volgende dingen doet: 
-    #       per BAM file:
-    #           reads_dict en depth_dict maken
-    #           binning (optioneel)
-    #           MC simulation
-    #       resultaten van BAM files bij elkaar voegen
-    
+    # Compute raw depths with error
     logging.info(f"Start computing raw depths with errors...")
-    
-    # raw_depths_with_errors = compute_raw_depths_with_error(bam_files_filtered, 
-    #                                                        reference_bins_csv=reference_bins_csv, 
-    #                                                        n_simulations=args.mc_samples, 
-    #                                                        pseudocount=args.pseudocount,
-    #                                                        batch_size=args.batch_size)
 
-    raw_depths_with_errors = compute_raw_depths_with_error_parallel(bam_files_filtered, 
-                                                                    reference_bins_csv=reference_bins_csv, 
-                                                                    n_simulations=args.mc_samples, 
-                                                                    pseudocount=args.pseudocount,
-                                                                    batch_size=args.batch_size,
-                                                                    n_jobs=args.threads)
+    depths_with_errors = compute_raw_depths_with_error(bam_files_filtered, 
+                                                        reference_bins_csv=reference_bins_csv, 
+                                                        n_simulations=args.mc_samples, 
+                                                        pseudocount=args.pseudocount,
+                                                        batch_size=args.batch_size,
+                                                        n_jobs=args.threads)
 
-    raw_depths_with_errors.to_csv(args.output, index=False)
+    # Get sample names
+    samples = set(depths_with_errors.Sample)
 
-    # IQMs met CIs absoluut maken m.b.v. read_count en DNA mass
+    # Load or calculate scaling factors    
+    scaling_factors = calculate_scaling_factors(samples, bam_files, initial_dna_mass, scaling_factors_dict, n_workers=args.threads)
 
+    # Calibrate depths using scaling_factors
+    for i, row in depths_with_errors.iterrows():
+        scaling_factor = scaling_factors[row["Sample"]]
+        # Calibrate depths and CIs
+        calibrated_depth = row["IQM_mean"] * scaling_factor
+        calibrated_lower_ci = row["IQM_lower_ci"] * scaling_factor
+        calibrated_upper_ci = row["IQM_upper_ci"] * scaling_factor
+        # Add calibrated values to dataframe
+        depths_with_errors.loc[i, ["calibrated_depth", "calibrated_lower_ci", "calibrated_upper_ci"]] = [
+            calibrated_depth, calibrated_lower_ci, calibrated_upper_ci
+        ]
 
-    # Compute absolute abundances
-    # absolute, lower_ci, upper_ci, zero_replaced, scaling_factors = compute_absolute_abundance_with_error(
-    #     raw_depths, dna_mass, bam_files, scaling_factors_dict,
-    #     n_monte_carlo=args.mc_samples,
-    #     alpha=args.alpha,
-    #     n_workers=args.threads
-    # )
+    # Save final output to CSV
+    depths_with_errors.to_csv(args.output, index=False)
+
+    logging.info(f"Results saved to '{args.output}'")
     
-#     # Create consolidated output with all information including zero-replaced raw_depths and scaling factors
-#     consolidated_df = create_consolidated_output(raw_depths, absolute, lower_ci, upper_ci, zero_replaced, scaling_factors)
-#     consolidated_df.to_csv(args.output)
-    
-#     # Save zero-replaced raw_depths separately for transparency
-#     zero_replaced_output = args.output.replace('.csv', '_zero_replaced.csv')
-#     zero_replaced.to_csv(zero_replaced_output)
-    
-#     logging.info(f"Results saved:")
-#     logging.info(f"  - Consolidated results (raw_depths, absolute, CI): {args.output}")
-#     logging.info(f"  - Zero-replaced raw_depths (for transparency): {zero_replaced_output}")
-    
+    # Final message
+    GREEN = "\033[92m"
+    CYAN = "\033[96m"
+    RESET = "\033[0m"
+    logging.info(GREEN + "="*44 + RESET)
+    logging.info(CYAN + "🌟 MGCalibrator has finished successfully! 🌟" + RESET)
+    logging.info(GREEN + "="*44 + RESET)
+    logging.info(CYAN + "Thank you for choosing MGCalibrator!\n" + RESET)
+
 #     # Generate plots if requested
 #     if args.plot:
 #         plot_output_base = args.output.replace('.csv', '')

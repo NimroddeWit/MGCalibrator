@@ -207,7 +207,10 @@ def MC_simulation_for_IQM_depth(depths, reads, n_simulations=1000, pseudocount=1
     return iqm_mean, iqm_lower_ci, iqm_upper_ci
 
 def process_bam_file(bam_file, reference_bins_csv, n_simulations, pseudocount, batch_size):
-    sample_name = os.path.basename(bam_file)
+    filename = os.path.basename(bam_file)
+    name_without_ext = filename.split('.')[0]
+    sample_name = "_".join(name_without_ext.split('_')[0:2])
+    
     depth_dict = get_depth_dict_with_samtools(bam_file)
     reads_dict = get_reads_dict_from_bam(bam_file)
 
@@ -250,7 +253,7 @@ def process_bam_file(bam_file, reference_bins_csv, n_simulations, pseudocount, b
 
     return result_rows
 
-def compute_raw_depths_with_error_parallel(
+def compute_raw_depths_with_error(
     bam_files_filtered, reference_bins_csv=None, n_simulations=100, pseudocount=1, batch_size=500, n_jobs=4):
 
     result_rows = []
@@ -265,63 +268,112 @@ def compute_raw_depths_with_error_parallel(
 
     return raw_depths_df
 
-def compute_raw_depths_with_error(
-        bam_files_filtered, reference_bins_csv=None, n_simulations=100, pseudocount=1, batch_size=500):
+# def compute_raw_depths_with_error(
+#         bam_files_filtered, reference_bins_csv=None, n_simulations=100, pseudocount=1, batch_size=500):
 
-    result_rows = []
+#     result_rows = []
     
-    for bam_file in bam_files_filtered:
+#     for bam_file in bam_files_filtered:
 
-        sample_name = os.path.basename(bam_file)
+#         filename = os.path.basename(bam_file)
+#         sample_name = "_".join(filename.split('_')[0:2])
 
-        depth_dict = get_depth_dict_with_samtools(bam_file)
-        reads_dict = get_reads_dict_from_bam(bam_file)
+#         depth_dict = get_depth_dict_with_samtools(bam_file)
+#         reads_dict = get_reads_dict_from_bam(bam_file)
 
-        logging.info(f"Reads_dict and depth_dict created for {sample_name}")
+#         logging.info(f"Reads_dict and depth_dict created for {sample_name}")
 
-        if reference_bins_csv:
-            num_refs_before = len(reads_dict.keys())
+#         if reference_bins_csv:
+#             num_refs_before = len(reads_dict.keys())
             
-            reads_dict, depth_dict = apply_binning_to_dicts(reads_dict, depth_dict, bam_file, reference_bins_csv)
+#             reads_dict, depth_dict = apply_binning_to_dicts(reads_dict, depth_dict, bam_file, reference_bins_csv)
             
-            num_refs_after = len(reads_dict.keys())
+#             num_refs_after = len(reads_dict.keys())
 
-            logging.info(f"Binning applied. Number of references: {num_refs_before} --> {num_refs_after}")
+#             logging.info(f"Binning applied. Number of references: {num_refs_before} --> {num_refs_after}")
         
-        logging.info(f"Starting {n_simulations} MC simulations in batches of {batch_size} for {sample_name}...")
+#         logging.info(f"Starting {n_simulations} MC simulations in batches of {batch_size} for {sample_name}...")
 
-        for ref in reads_dict.keys():
+#         for ref in reads_dict.keys():
             
-            if np.shape(reads_dict[ref])[0] > 0:
+#             if np.shape(reads_dict[ref])[0] > 0:
                 
-                IQM_mean, IQM_lower_ci, IQM_upper_ci = MC_simulation_for_IQM_depth(depth_dict[ref], reads_dict[ref], 
-                                                                                   n_simulations=n_simulations, 
-                                                                                   pseudocount=pseudocount, 
-                                                                                   batch_size=batch_size)
+#                 IQM_mean, IQM_lower_ci, IQM_upper_ci = MC_simulation_for_IQM_depth(depth_dict[ref], reads_dict[ref], 
+#                                                                                    n_simulations=n_simulations, 
+#                                                                                    pseudocount=pseudocount, 
+#                                                                                    batch_size=batch_size)
                 
-                result_rows.append({
-                    "Sample": sample_name,
-                    "Reference": ref,
-                    "IQM_mean": IQM_mean,
-                    "IQM_lower_ci": IQM_lower_ci,
-                    "IQM_upper_ci": IQM_upper_ci
-                })
+#                 result_rows.append({
+#                     "Sample": sample_name,
+#                     "Reference": ref,
+#                     "IQM_mean": IQM_mean,
+#                     "IQM_lower_ci": IQM_lower_ci,
+#                     "IQM_upper_ci": IQM_upper_ci
+#                 })
 
-            else:
+#             else:
                 
-                result_rows.append({
-                    "Sample": sample_name,
-                    "Reference": ref,
-                    "IQM_mean": 0,
-                    "IQM_lower_ci": 0,
-                    "IQM_upper_ci": 0,
-                })
+#                 result_rows.append({
+#                     "Sample": sample_name,
+#                     "Reference": ref,
+#                     "IQM_mean": 0,
+#                     "IQM_lower_ci": 0,
+#                     "IQM_upper_ci": 0,
+#                 })
 
-        logging.info(f"Monte Carlo simulation for {sample_name} done.")
+#         logging.info(f"Monte Carlo simulation for {sample_name} done.")
 
-    raw_depths_df = pd.DataFrame(result_rows)
+#     raw_depths_df = pd.DataFrame(result_rows)
 
-    return raw_depths_df
+#     return raw_depths_df
+
+def calculate_scaling_factors(samples, bam_files, initial_dna_mass, scaling_factors_dict, n_workers=None):
+    scaling_factors = {}
+    # Check if scaling_factors_dict exists, if True: load into dictionary
+    if os.path.exists(scaling_factors_dict):
+        with open(scaling_factors_dict, 'r') as f:
+            for line in f:
+                line = line.strip()
+                # Split at the first colon
+                sample, scaling_factor = line.split(':', 1)
+                sample = sample.strip()
+                scaling_factor = float(scaling_factor.strip())
+                scaling_factors[sample] = scaling_factor
+
+    # If not all samples are represented in the scaling_factors dictionary: calculate new scaling_factors and save to file
+    if not samples <= set(scaling_factors.keys()):
+
+        logging.info(f"No scaling factors provided or not all samples represented: Calculating scaling factors...")
+
+        # Calculate final DNA mass from BAM files
+        sample_base_pairs = calculate_total_base_pairs(bam_files=bam_files, n_workers=n_workers)
+        final_dna_mass = {sample: sample_base_pairs.get(sample, 0) * 1.079e-12  # Convert to ng
+                        for sample in samples}
+            
+        logging.debug(f"sample_base_pairs: {sample_base_pairs}")
+        logging.debug(f"samples: {samples}")
+        logging.debug(f"final_dna_mass: {final_dna_mass}")
+
+        # Check for samples with no BAM data
+        for sample in samples:
+            if final_dna_mass[sample] == 0:
+                raise ValueError(f"No base pairs found for {sample} in BAM files.")
+
+        # Calculate scaling factors
+        scaling_factors = {sample: initial_dna_mass[sample] / final_dna_mass[sample] 
+                        for sample in samples}
+
+        logging.info(f"Calculated scaling factors: {scaling_factors}")
+
+        # Save it to a file in the expected format:
+        with open(scaling_factors_dict, "w") as file:
+            for key, value in scaling_factors.items():
+                file.write(f"{key}: {value}\n")
+
+    else:
+        logging.info(f"All necessary scaling factors loaded from file: {scaling_factors}")
+
+    return scaling_factors
 
 def function_to_collapse_all_comments():
     
