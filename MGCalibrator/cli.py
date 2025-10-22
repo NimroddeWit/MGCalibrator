@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import logging
 import os
+import subprocess
 from .processor import run_coverm_filter, compute_raw_depths_with_error, calculate_scaling_factors
 from .fileutils import list_bam_files
 
@@ -26,6 +27,7 @@ def main():
                         help="Number of threads to use for parallel processing (default: all available cores)")
     
     # Depth calculation options
+    parser.add_argument("--skip_filtering", action='store_true', help="Skip filtering based on mapping identity")
     parser.add_argument("--perc_ident", default=97, help="Minimal mapping identity (%) for calculating depth")
     
     # Error propagation options
@@ -75,12 +77,25 @@ def main():
     scaling_factors_dict = args.scaling_factors
     output_dir = os.path.dirname(args.output)
 
-    # Filter BAM files
-    logging.info(f"Filtering BAM files with {min_read_perc_identity}% identity...")
     
-    bam_files_filtered = run_coverm_filter(bam_files, min_read_perc_identity, output_dir)
-    
-    logging.info(f"Filtering completed.")
+    if not args.skip_filtering:
+        # Filter BAM files
+        logging.info(f"Filtering BAM files with {min_read_perc_identity}% identity...")
+        
+        bam_files_filtered = run_coverm_filter(bam_files, min_read_perc_identity, output_dir)
+        
+        logging.info(f"Filtering completed.")
+
+    else:
+        bam_files_filtered = bam_files
+        for bam_file in bam_files_filtered:
+            try:
+                # Index the filtered BAM file using samtools
+                index_cmd = ["samtools", "index", bam_file]
+                subprocess.run(index_cmd, check=True)
+            except subprocess.CalledProcessError as e:
+                # Handle errors if the samtools command fails
+                logging.info(f"Error occurred while processing {bam_file}: {e}")
 
     # Compute raw depths with error
     logging.info(f"Start computing raw depths with errors...")
@@ -98,17 +113,15 @@ def main():
     # Load or calculate scaling factors    
     scaling_factors = calculate_scaling_factors(samples, bam_files, initial_dna_mass, scaling_factors_dict, n_workers=args.threads)
 
-    # Calibrate depths using scaling_factors
-    for i, row in depths_with_errors.iterrows():
-        scaling_factor = scaling_factors[row["Sample"]]
-        # Calibrate depths and CIs
-        calibrated_depth = row["IQM_mean"] * scaling_factor
-        calibrated_lower_ci = row["IQM_lower_ci"] * scaling_factor
-        calibrated_upper_ci = row["IQM_upper_ci"] * scaling_factor
-        # Add calibrated values to dataframe
-        depths_with_errors.loc[i, ["calibrated_depth", "calibrated_lower_ci", "calibrated_upper_ci"]] = [
-            calibrated_depth, calibrated_lower_ci, calibrated_upper_ci
-        ]
+    logging.info("Calibrating depths...")
+
+    # Maak een Series van de scaling_factors met dezelfde index als depths_with_errors
+    depths_with_errors["scaling_factor"] = depths_with_errors["Sample"].map(scaling_factors)
+
+    # Calibreer direct, zonder loops:
+    depths_with_errors["calibrated_depth"] = depths_with_errors["IQM_mean"] * depths_with_errors["scaling_factor"]
+    depths_with_errors["calibrated_lower_ci"] = depths_with_errors["IQM_lower_ci"] * depths_with_errors["scaling_factor"]
+    depths_with_errors["calibrated_upper_ci"] = depths_with_errors["IQM_upper_ci"] * depths_with_errors["scaling_factor"]
 
     # Save final output to CSV
     depths_with_errors.to_csv(args.output, index=False)
@@ -119,10 +132,10 @@ def main():
     GREEN = "\033[92m"
     CYAN = "\033[96m"
     RESET = "\033[0m"
-    logging.info(GREEN + "="*44 + RESET)
+    logging.info(GREEN + "="*45 + RESET)
     logging.info(CYAN + "🌟 MGCalibrator has finished successfully! 🌟" + RESET)
-    logging.info(GREEN + "="*44 + RESET)
-    logging.info(CYAN + "Thank you for choosing MGCalibrator!\n" + RESET)
+    logging.info(GREEN + "="*45 + RESET)
+    logging.info(CYAN + "    Thank you for choosing MGCalibrator!\n" + RESET)
 
 #     # Generate plots if requested
 #     if args.plot:
