@@ -17,6 +17,7 @@ def main():
     parser.add_argument("--extensions", nargs='*', default=[".sorted.bam", ".sort.bam"], 
                         help="List of sequence file extensions to search for (default: .sorted.bam, .sort.bam)")
     parser.add_argument("--suffixes", nargs="*", help="List of suffixes to filter in files")
+    parser.add_argument("--reference_clusters", help="CSV file indicating to which cluster belongs each reference sequence")
     parser.add_argument("--reference_bins", help="CSV file indicating to which bin belongs each reference sequence")
     parser.add_argument("--dna_mass", required=True, help="CSV file with measured DNA mass (ng)") 
     parser.add_argument("--scaling_factors", required=True, help="Dictionary containing calculated scaling factors (loaded when file exists)")
@@ -72,11 +73,11 @@ def main():
     # Get variables from arguments
     dna_mass_df = pd.read_csv(args.dna_mass)
     initial_dna_mass = dict(zip(dna_mass_df.sample_id, dna_mass_df.DNA_mass))
+    reference_clusters_csv = args.reference_clusters
     reference_bins_csv = args.reference_bins
     min_read_perc_identity = args.perc_ident
     scaling_factors_dict = args.scaling_factors
     output_dir = os.path.dirname(args.output)
-
     
     if not args.skip_filtering:
         # Filter BAM files
@@ -88,19 +89,22 @@ def main():
 
     else:
         bam_files_filtered = bam_files
+        # Index BAM files that are not indexed
         for bam_file in bam_files_filtered:
-            try:
-                # Index the filtered BAM file using samtools
-                index_cmd = ["samtools", "index", bam_file]
-                subprocess.run(index_cmd, check=True)
-            except subprocess.CalledProcessError as e:
-                # Handle errors if the samtools command fails
-                logging.info(f"Error occurred while processing {bam_file}: {e}")
+            if not os.path.exists(f"{bam_file}.bai"):
+                try:
+                    # Index the filtered BAM file using samtools
+                    index_cmd = ["samtools", "index", bam_file]
+                    subprocess.run(index_cmd, check=True)
+                except subprocess.CalledProcessError as e:
+                    # Handle errors if the samtools command fails
+                    logging.info(f"Error occurred while processing {bam_file}: {e}")
 
     # Compute raw depths with error
     logging.info(f"Start computing raw depths with errors...")
 
     depths_with_errors = compute_raw_depths_with_error(bam_files_filtered, 
+                                                        reference_clusters_csv=reference_clusters_csv,
                                                         reference_bins_csv=reference_bins_csv, 
                                                         n_simulations=args.mc_samples, 
                                                         pseudocount=args.pseudocount,

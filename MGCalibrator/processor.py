@@ -90,12 +90,41 @@ def get_reads_dict_from_bam(bam_path):
     bamfile.close()
     return reads_dict
 
-def apply_binning_to_dicts(reads_dict, depth_dict, bam_path, bin_csv_path):
+def apply_clustering_to_dicts(reads_dict, depth_dict, clusters_csv_path):
+    """
+    Voegt referenties samen tot clusters volgens een csv-bestand.
+    """
+    ref_clusters = pd.read_csv(clusters_csv_path)
+    ref_clusters.columns = ["sequence", "cluster"]
+
+    # Loop over bins
+    for cluster_name in ref_clusters["cluster"].unique():
+        # Initiate lists
+        list_of_depth_lists = []
+        list_of_reads_arrays = []
+        # Loop over sequences in deze cluster
+        for i, sequence in enumerate(ref_clusters.loc[ref_clusters["cluster"] == cluster_name, "sequence"]):
+            # Add depth_list to list_of_depth_lists
+            list_of_depth_lists.append(depth_dict[sequence])
+            list_of_reads_arrays.append(reads_dict[sequence])
+            # Verwijder individuele sequence uit dicts
+            del reads_dict[sequence]
+            del depth_dict[sequence]
+        # Sum depths of all depth lists and add to depth dictionary
+        summed_depths = np.zeros(max(len(depth_list) for depth_list in list_of_depth_lists))
+        for depth_list in list_of_depth_lists:
+            summed_depths[:len(depth_list)] += depth_list
+        depth_dict[cluster_name] = summed_depths
+        # Stack reads arrays and add to dictionary
+        reads_dict[cluster_name] = np.vstack(list_of_reads_arrays)
+    return reads_dict, depth_dict
+
+def apply_binning_to_dicts(reads_dict, depth_dict, bam_path, bins_csv_path):
     """
     Voegt referenties samen tot bins volgens een csv-bestand.
     """
     bamfile = pysam.AlignmentFile(bam_path, "rb")
-    ref_bins = pd.read_csv(bin_csv_path)
+    ref_bins = pd.read_csv(bins_csv_path)
     ref_bins.columns = ["sequence", "bin"]
     ref_bins["ref_length"] = ""
 
@@ -211,7 +240,7 @@ def MC_simulation_for_IQM_depth(depths, reads, n_simulations=1000, pseudocount=1
 
     return iqm_mean, iqm_lower_ci, iqm_upper_ci
 
-def process_bam_file(bam_file, reference_bins_csv, n_simulations, pseudocount, batch_size):
+def process_bam_file(bam_file, reference_clusters_csv, reference_bins_csv, n_simulations, pseudocount, batch_size):
     filename = os.path.basename(bam_file)
     name_without_ext = filename.split('.')[0]
     sample_name = "_".join(name_without_ext.split('_')[0:2])
@@ -220,6 +249,13 @@ def process_bam_file(bam_file, reference_bins_csv, n_simulations, pseudocount, b
     reads_dict = get_reads_dict_from_bam(bam_file)
 
     logging.info(f"Reads_dict and depth_dict created for {sample_name}")
+
+    if reference_clusters_csv:
+        num_refs_before = len(reads_dict.keys())
+        reads_dict, depth_dict = apply_clustering_to_dicts(reads_dict, depth_dict, reference_clusters_csv)
+        num_refs_after = len(reads_dict.keys())
+
+        logging.info(f"Clustering applied. Number of references: {num_refs_before} --> {num_refs_after}")
 
     if reference_bins_csv:
         num_refs_before = len(reads_dict.keys())
@@ -251,14 +287,14 @@ def process_bam_file(bam_file, reference_bins_csv, n_simulations, pseudocount, b
     return result_rows
 
 def compute_raw_depths_with_error(
-    bam_files_filtered, reference_bins_csv=None, n_simulations=100, pseudocount=1, batch_size=500, n_jobs=4):
+    bam_files_filtered, reference_clusters_csv=None, reference_bins_csv=None, n_simulations=100, pseudocount=1, batch_size=500, n_jobs=4):
 
     result_rows = []
     with concurrent.futures.ProcessPoolExecutor(max_workers=n_jobs) as executor:
         futures = []
         for bam_file in bam_files_filtered:
             futures.append(executor.submit(
-                process_bam_file, bam_file, reference_bins_csv, n_simulations, pseudocount, batch_size))
+                process_bam_file, bam_file, reference_clusters_csv, reference_bins_csv, n_simulations, pseudocount, batch_size))
         for future in concurrent.futures.as_completed(futures):
             result_rows.extend(future.result())
     raw_depths_df = pd.DataFrame(result_rows)
