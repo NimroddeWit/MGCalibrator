@@ -68,6 +68,7 @@ absolutifier \
 - Input bam filenames should be in this format: `sample_1_(...).sorted.bam`
 - `reference_bins.csv` file should have a header (content of header does not matter), and bin names should be different than any of the individual reference names
 - `dna_mass.csv` should contain `sample_id` and `DNA_mass` as headers, and sample_id column should contain all samples that are also present in the input directory
+- Sequences that are being clustered cannot also be binned. 
 
 ## 🧪 Input Format Example [NEEDS UPDATE]
 
