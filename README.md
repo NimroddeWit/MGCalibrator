@@ -1,105 +1,202 @@
-# MGCalibrator
+# 🧬 MGCalibrator
 
-Raw feature counts from metagenomic sequencing are not directly comparable across samples due to variations in sequencing depth and initial DNA input. `MGCalibrator` addresses this by converting raw counts into **absolute abundances**.
 
-The tool works by calculating a sample-specific scaling factor based on the total DNA weight present *before* sequencing (in ng, as determined by, e.g., Qubit HS). This scaling factor is used to calibrate the raw counts, allowing for valid simulation of scale across samples.`MGCalibrator` estimates uncertainty in these absolute abundances by adding a pseudocount to the observed counts and then drawing Monte Carlo samples from a Dirichlet distribution and provides a measure of error (95% confidence intervals for each feature).
+**MGCalibrator** is a command-line tool for **metagenomic absolute abundance calibration**.
+It converts sequencing-derived coverage information from BAM files into **absolute abundances (number of copies)** with **statistical confidence intervals**.
 
-`MGCalibrator` works with any type of biological features: **taxa, genes, functional categories, etc.**
+This enables **cross-sample comparison** by correcting for:
+
+* differences in sequencing depth, and
+* differences in the total DNA input before sequencing.
+
+The tool uses per-sample scaling factors and Monte Carlo simulation to estimate measurement uncertainty.
+
+---
+
+## 🚀 Overview
+
+MGCalibrator performs the following steps:
+
+1. **(Optional)** Filters BAM files by minimum read percent identity using [`CoverM`](https://github.com/wwood/CoverM).
+2. **Extracts read depths** per reference sequence from BAM files (`samtools depth`).
+3. **(Optional)** Clusters or bins references according to user-provided CSVs.
+4. **Runs Monte Carlo simulations** to estimate confidence intervals for each reference’s mean depth (M98).
+5. **Computes sample-specific scaling factors** from input DNA masses and sequenced base pairs.
+6. **Calibrates raw depths** to absolute abundances (number of copies), with confidence intervals.
 
 ---
 
 ## 📦 Installation
 
-Clone or download the repository and install it using pip:
+Clone and install the repository with:
 
 ```bash
+git clone https://github.com/NimroddeWit/MGCalibrator.git
+cd MGCalibrator
 pip install .
 ```
 
-Optionally, use a virtual environment:
+**Requirements:**
 
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install .
-```
+* Python ≥ 3.9
+* [`samtools`](http://www.htslib.org/)
+* [`coverm`](https://github.com/wwood/CoverM) (optional but recommended)
+* Other dependencies are installed automatically (`pandas`, `numpy`, `pysam`, etc.)
 
 ---
 
 ## ▶️ Example Usage
 
-Run Absolutifier with [NEEDS UPDATE]:
+```bash
+MGCalibrator \
+  --bam_folder data/bams/ \
+  --dna_mass data/dna_mass.csv \
+  --scaling_factors data/scaling_factors.txt \
+  --output results/calibrated_abundances.csv \
+  --reference_clusters data/reference_clusters.csv \
+  --reference_bins data/reference_bins.csv \
+  --perc_ident 97 \
+  --threads 8 \
+  --mc_samples 500 \
+  --batch_size 500 \
+  --pseudocount 1.0
+```
+
+---
+
+## ⚙️ Command-Line Arguments
+
+| **Argument**           | **Required** | **Description**                                                                    |
+| ---------------------- | ------------ | ---------------------------------------------------------------------------------- |
+| `--bam_folder`         | ✅            | Folder containing input `.bam` files.                                              |
+| `--extensions`         | ❌            | File extensions to search for (default: `.sorted.bam`, `.sort.bam`).               |
+| `--suffixes`           | ❌            | List of suffixes to filter file names.                                             |
+| `--reference_clusters` | ❌            | CSV mapping reference sequences to cluster names.                                  |
+| `--reference_bins`     | ❌            | CSV mapping reference sequences to bins.                                           |
+| `--dna_mass`           | ✅            | CSV file with measured total DNA mass (ng) per sample (`sample_id, DNA_mass`).     |
+| `--scaling_factors`    | ✅            | Path to a text file containing scaling factors (created or updated automatically). |
+| `--output`             | ✅            | Path for the output CSV containing absolute abundances.                            |
+| `--threads`            | ❌            | Number of CPU cores to use (default: all available).                               |
+| `--skip_filtering`     | ❌            | Skip the CoverM filtering step (requires already filtered BAMs).                   |
+| `--perc_ident`         | ❌            | Minimum read percent identity for filtering (default: 97).                         |
+| `--mc_samples`         | ❌            | Number of Monte Carlo samples for confidence intervals (default: 100).             |
+| `--batch_size`         | ❌            | Number of simulations per batch (default: 500).                                    |
+| `--pseudocount`        | ❌            | Pseudocount for read-mapping probability (default: 1.0).                           |
+
+---
+
+## 🧪 Input File Requirements
+
+### 1. **BAM files**
+
+* Must be sorted and indexed (`.sorted.bam` + `.bai`).
+* Filenames should follow this format:
+
+  ```
+  sample_1_(...).sorted.bam
+  sample_2_(...).sorted.bam
+  ```
+
+### 2. **dna_mass.csv**
+
+| sample_id | DNA_mass |
+| --------- | -------- |
+| sample_1  | 22.5     |
+| sample_2  | 31.1     |
+
+* The `sample_id` column must match the prefixes of the BAM files.
+
+### 3. **reference_clusters.csv (optional)**
+
+| sequence   | cluster   |
+| ---------- | --------- |
+| contig_001 | cluster_1 |
+| contig_002 | cluster_1 |
+
+### 4. **reference_bins.csv (optional)**
+
+| sequence   | bin   |
+| ---------- | ----- |
+| contig_001 | bin_A |
+| contig_002 | bin_A |
+
+> ⚠️ Clustered references cannot also be binned.
+
+---
+
+## 📈 Output
+
+The main output is a CSV with the following columns:
+
+| Sample | Reference | M98_mean | M98_lower_ci | M98_upper_ci | scaling_factor | calibrated_depth | calibrated_lower_ci | calibrated_upper_ci |
+| ------ | --------- | -------- | ------------ | ------------ | -------------- | ---------------- | ------------------- | ------------------- |
+
+---
+
+## 🧮 How It Works
+
+### Step 1. Filter BAMs
+
+Reads below the percent identity threshold (e.g., 97%) are filtered using **CoverM**.
+
+### Step 2. Compute Depths
+
+Depths per position are calculated using:
 
 ```bash
-absolutifier \
-  --counts data/PE_fastq/counts.csv \
-  --meta data/PE_fastq/metadata.csv \
-  --output output_pe_absolute.csv \
-  --volume 500 \
-  --fastq_folder data/PE_fastq \
-  --suffixes _R1 _R2 \
-  --extension .fastq
+samtools depth -a file.bam
 ```
 
-### Explanation of Parameters [NEEDS UPDATE]
+and stored as NumPy arrays per reference.
 
-| **Flag**         | **Description**                                                                 |
-|------------------|---------------------------------------------------------------------------------|
-| `--counts`       | CSV file with **sample rows** and **feature columns** (e.g., `sample_id,feature_1,...`) |
-| `--meta`         | CSV file with `sample_id` and `DNA_conc` columns                               |
-| `--volume`       | DNA volume (microL) before sequencing (fixed for all samples)                              |
-| `--output`       | Output CSV file with absolute abundances                                       |
-| `--fastq_folder` | **(Required)** Folder with FASTQ/FASTA files                                     |
-| `--extension`    | *(Optional)* File extension (default: `.fastq`)                                |
-| `--suffixes`     | *(Optional)* List of suffixes for filtering file names (e.g., `_R1 _R2`)       |
-| `--singleton`    | *(Optional)* Additional single FASTQ file(s) to include                        |
-| `--error_bars`   | *(Optional)* Flag to calculate 95% confidence intervals with Monte Carlo sampling |
-| `--mc_samples`   | *(Optional)* Number of Monte Carlo samples for error bars (default: 1000)      |
-| `--alpha`        | *(Optional)* Dirichlet prior for the Bayesian error model (default: 0.5)        |
-| `--plot`         | *(Optional)* Flag to generate visualization plots of the results               |
-| `--top_features` | *(Optional)* Number of top features to include in plots (default: 20)          |
-| `--plot_format`  | *(Optional)* Image format for plots (png, pdf, svg; default: png)               |
-| `--figsize`      | *(Optional)* Figure size for plots (width height; default: 12 8)                |
+### Step 3. Monte Carlo Simulation
+
+Each reference is resampled (`n_simulations` times) to estimate mean coverage (`M98`) and 95% confidence intervals.
+
+### Step 4. Scaling
+
+Scaling factors are computed as:
+[
+\text{Scaling factor} = \frac{\text{Initial DNA mass}}{\text{Final DNA mass after sequencing}}
+]
+
+### Step 5. Calibration
+
+Final absolute abundances (in number of copies) are derived by multiplying scaled depths with the computed scaling factors.
 
 ---
 
-## Input prerequisites
+## 💡 Tips
 
-- Input bam filenames should be in this format: `sample_1_(...).sorted.bam`
-- `reference_bins.csv` file should have a header (content of header does not matter), and bin names should be different than any of the individual reference names
-- `dna_mass.csv` should contain `sample_id` and `DNA_mass` as headers, and sample_id column should contain all samples that are also present in the input directory
-- Sequences that are being clustered cannot also be binned. 
-
-## 🧪 Input Format Example [NEEDS UPDATE]
-
-**counts.csv**:
-
-```csv
-sample_id,feature_1,feature_2,feature_3
-sample_1,0,5,2
-sample_2,2,0,10
-sample_3,100,4,0
-```
-
-**metadata.csv**:
-
-```csv
-sample_id,DNA_conc
-sample_1,22.5
-sample_2,31.1
-sample_3,29.3
-```
+* For reproducibility, use consistent naming between BAM files and DNA mass table.
+* Reuse previously computed scaling factors (they are cached in `--scaling_factors`).
+* Increase `--mc_samples` for more precise confidence intervals (at the cost of runtime).
 
 ---
 
-## 🛠️ Features
+## 🧰 Dependencies
 
-- **Scaling factor**: Calculates scaling factors by comparing DNA input to total sequenced base pairs.
-- **Robust Error Propagation**: Computes 95% confidence intervals using a Bayesian model with Monte Carlo sampling.
-- **Comprehensive Outputs**: Generates consolidated tables with counts, absolute abundances, confidence intervals, and scaling factors.
-- **Publication-Ready Plots**: Creates high-quality bar plots, heatmaps, and confidence interval comparisons.
-- **Flexible Input**: Supports paired-end, single-end, and mixed FASTQ/FASTA files.
+| Package                 | Purpose             |
+| ----------------------- | ------------------- |
+| `pandas`, `numpy`       | Data handling       |
+| `pysam`                 | BAM file parsing    |
+| `matplotlib`, `seaborn` | (Optional) plotting |
+| `coverm`, `samtools`    | External tools      |
 
 ---
 
-Feel free to open issues or contribute to development!
+## 📄 Citation
+
+If you use **MGCalibrator** in your research, please cite:
+
+> de Wit, N. et al. (2026). [insert publication title here...]
+> GitHub: [https://github.com/NimroddeWit/MGCalibrator](https://github.com/NimroddeWit/MGCalibrator)
+
+---
+
+## 🙌 Acknowledgements
+
+Developed by **Nimrod de Wit**
+📍 RIVM, 2025
+
+---
