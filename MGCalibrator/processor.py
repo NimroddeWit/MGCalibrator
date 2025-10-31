@@ -21,11 +21,11 @@ import pysam
 from .parser import calculate_total_base_pairs
 
 
-def _get_depth_M98(depth_list):
+def _get_raw_depth(depth_list):
     depths = np.sort(np.array(depth_list))
     n = len(depths)
-    q1_idx = int(0.01 * n)
-    q3_idx = int(0.99 * n)
+    q1_idx = int(0.25 * n)
+    q3_idx = int(0.75 * n)
     iqr_depths = depths[q1_idx:q3_idx+1]
     iqm = np.mean(iqr_depths)
     return iqm
@@ -387,7 +387,7 @@ def apply_binning_to_dicts(
 
     return reads_dict, depth_dict
 
-def MC_simulation_for_M98_depth(
+def MC_simulation_for_raw_depth(
     depths: np.ndarray,
     reads: np.ndarray,
     n_simulations: int = 1000,
@@ -395,7 +395,7 @@ def MC_simulation_for_M98_depth(
     batch_size: int = 500,
 ) -> tuple[float, float, float]:
     """
-    Monte Carlo simulation to estimate M98 depth (mean of 98% of inner values) from read coverage.
+    Monte Carlo simulation to estimate raw depth (mean of 98% of inner values) from read coverage.
 
     Parameters
     ----------
@@ -413,13 +413,13 @@ def MC_simulation_for_M98_depth(
     Returns
     -------
     tuple[float, float, float]
-        (mean M98, lower 2.5% CI, upper 97.5% CI)
+        (mean raw, lower 2.5% CI, upper 97.5% CI)
     """
     n_mapped_reads = reads.shape[0]
     sim_total_reads = np.random.poisson(n_mapped_reads, n_simulations)
     reads_per_sim = sim_total_reads - n_mapped_reads
 
-    M98_list = []
+    raw_depth_list = []
     n_batches = int(np.ceil(n_simulations / batch_size))
 
     for batch_idx in range(n_batches):
@@ -436,7 +436,7 @@ def MC_simulation_for_M98_depth(
 
             n_reads = abs(n)
             if n_reads == 0:
-                M98_list.append(_get_depth_M98(sim_depths))
+                raw_depth_list.append(_get_raw_depth(sim_depths))
                 continue
 
             if n < 0:
@@ -447,7 +447,7 @@ def MC_simulation_for_M98_depth(
                 remove_lengths = reads[indices_to_remove, 1]
                 for start, length in zip(remove_starts, remove_lengths):
                     sim_depths[start:start+length] -= 1
-                M98_list.append(_get_depth_M98(sim_depths))
+                raw_depth_list.append(_get_raw_depth(sim_depths))
 
             else:
                 # Add reads
@@ -466,13 +466,13 @@ def MC_simulation_for_M98_depth(
                 for pos, length in zip(positions_to_add, lengths_to_add):
                     sim_depths[pos:pos+length] += 1
 
-                M98_list.append(_get_depth_M98(sim_depths))
+                raw_depth_list.append(_get_raw_depth(sim_depths))
 
-    m98_mean = float(np.mean(M98_list))
-    m98_lower_ci = float(np.percentile(M98_list, 2.5))
-    m98_upper_ci = max(m98_mean, float(np.percentile(M98_list, 97.5)))
+    raw_mean = float(np.mean(raw_depth_list))
+    raw_lower_ci = float(np.percentile(raw_depth_list, 2.5))
+    raw_upper_ci = max(raw_mean, float(np.percentile(raw_depth_list, 97.5)))
 
-    return m98_mean, m98_lower_ci, m98_upper_ci
+    return raw_mean, raw_lower_ci, raw_upper_ci
 
 def process_bam_file(
     bam_file: str,
@@ -485,7 +485,7 @@ def process_bam_file(
     """
     Process a BAM file: generate reads and depth dictionaries,
     apply clustering and binning, and run Monte Carlo simulations
-    to compute M98 statistics.
+    to compute raw statistics.
 
     Parameters
     ----------
@@ -505,7 +505,7 @@ def process_bam_file(
     Returns
     -------
     list[dict]
-        List of dictionaries with M98 results per reference.
+        List of dictionaries with raw results per reference.
     """
     filename = os.path.basename(bam_file)
     name_without_ext = filename.split('.')[0]
@@ -538,7 +538,7 @@ def process_bam_file(
     for ref, reads_array in reads_dict.items():
         if reads_array.shape[0] == 0:
             continue
-        m98_mean, m98_lower_ci, m98_upper_ci = MC_simulation_for_M98_depth(
+        raw_mean, raw_lower_ci, raw_upper_ci = MC_simulation_for_raw_depth(
             depth_dict[ref],
             reads_array,
             n_simulations=n_simulations,
@@ -548,9 +548,9 @@ def process_bam_file(
         result_rows.append({
             "Sample": sample_name,
             "Reference": ref,
-            "M98_mean": m98_mean,
-            "M98_lower_ci": m98_lower_ci,
-            "M98_upper_ci": m98_upper_ci,
+            "raw_mean": raw_mean,
+            "raw_lower_ci": raw_lower_ci,
+            "raw_upper_ci": raw_upper_ci,
         })
 
     logging.info(f"Monte Carlo simulation for {sample_name} done.")

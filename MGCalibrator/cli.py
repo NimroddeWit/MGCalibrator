@@ -249,13 +249,13 @@ def main() -> None:
     depths_with_errors["scaling_factor"] = depths_with_errors["Sample"].map(scaling_factors)
 
     depths_with_errors["calibrated_depth"] = (
-        depths_with_errors["M98_mean"] * depths_with_errors["scaling_factor"]
+        depths_with_errors["raw_mean"] * depths_with_errors["scaling_factor"]
     )
     depths_with_errors["calibrated_lower_ci"] = (
-        depths_with_errors["M98_lower_ci"] * depths_with_errors["scaling_factor"]
+        depths_with_errors["raw_lower_ci"] * depths_with_errors["scaling_factor"]
     )
     depths_with_errors["calibrated_upper_ci"] = (
-        depths_with_errors["M98_upper_ci"] * depths_with_errors["scaling_factor"]
+        depths_with_errors["raw_upper_ci"] * depths_with_errors["scaling_factor"]
     )
 
     # ----------------------
