@@ -68,7 +68,7 @@ def run_coverm_filter(
             output_dir,
             filename.replace(
                 ".sorted.bam",
-                f"_filtered{min_read_perc_identity}.bam"
+                f"_filtered{int(min_read_perc_identity)}.bam"
             )
         )
 
@@ -250,30 +250,33 @@ def apply_clustering_to_dicts(
 
     # Process clusters
     for cluster_name, sequences in cluster_map.items():
-        # Check that all sequences exist in both dicts
-        missing_reads = [s for s in sequences if s not in reads_dict]
-        missing_depths = [s for s in sequences if s not in depth_dict]
-        if missing_reads or missing_depths:
-            logging.warning(
-                f"Skipping cluster '{cluster_name}' due to missing data: "
-                f"{missing_reads or missing_depths}"
-            )
+        # Find which sequences exist in both dicts
+        present_in_reads = [s for s in sequences if s in reads_dict]
+        present_in_depths = [s for s in sequences if s in depth_dict]
+        common_sequences = list(set(present_in_reads) & set(present_in_depths))
+
+        # If nothing remains, skip this cluster
+        if not common_sequences:
+            logging.warning(f"Cluster '{cluster_name}' skipped (no valid sequences found).")
             continue
 
         # Combine depth arrays (vectorized summation)
-        max_len = max(len(depth_dict[s]) for s in sequences)
+        max_len = max(len(depth_dict[s]) for s in common_sequences)
         summed_depth = np.zeros(max_len, dtype=np.float32)
-        for s in sequences:
+        for s in common_sequences:
             d = depth_dict[s]
             summed_depth[:len(d)] += d
 
         # Combine read arrays efficiently
-        reads_combined = np.vstack(
-            [reads_dict[s] for s in sequences if len(reads_dict[s]) > 0]
-        ) if any(len(reads_dict[s]) > 0 for s in sequences) else np.empty((0, 2), dtype=np.int32)
+        if any(len(reads_dict[s]) > 0 for s in common_sequences):
+            reads_combined = np.vstack(
+                [reads_dict[s] for s in common_sequences if len(reads_dict[s]) > 0]
+            )
+        else:
+            reads_combined = np.empty((0, 2), dtype=np.int32)
 
         # Remove individual sequences to save memory
-        for s in sequences:
+        for s in common_sequences:
             reads_dict.pop(s, None)
             depth_dict.pop(s, None)
 
@@ -281,7 +284,7 @@ def apply_clustering_to_dicts(
         depth_dict[cluster_name] = summed_depth
         reads_dict[cluster_name] = reads_combined
 
-        logging.debug(f"Cluster '{cluster_name}' merged ({len(sequences)} refs)")
+        logging.debug(f"Cluster '{cluster_name}' merged ({len(common_sequences)} refs)")
 
     return reads_dict, depth_dict
 

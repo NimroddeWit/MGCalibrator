@@ -89,7 +89,7 @@ MGCalibrator \
 
 ### 1. **BAM files**
 
-* Must be sorted and indexed (`.sorted.bam` + `.bai`).
+* In case of filtering they must be sorted (`.sorted.bam`).
 * Filenames should follow this format:
 
   ```
