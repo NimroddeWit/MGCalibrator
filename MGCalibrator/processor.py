@@ -200,37 +200,39 @@ def get_reads_dict_from_bam(bam_path: str) -> Dict[str, np.ndarray]:
 
     return reads_dict
 
+from typing import Dict, Tuple
+import numpy as np
+import pandas as pd
+import logging
+
 def apply_clustering_to_dicts(
     reads_dict: Dict[str, np.ndarray],
     depth_dict: Dict[str, np.ndarray],
     clusters_csv_path: str
 ) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]:
     """
-    Merge reference-level read and depth data into clusters as defined by a CSV file.
-
+    Merge reference-level read and depth data into clusters defined in a CSV file.
+    
+    Each cluster is assigned the length of the shortest reference sequence in that cluster.
+    Reads and depth arrays are truncated accordingly:
+      - Depth arrays are summed up to the minimum length.
+      - Reads that extend beyond the cluster length are truncated to fit.
+    
     Parameters
     ----------
     reads_dict : dict[str, np.ndarray]
-        Dictionary mapping reference names to arrays of read information
-        (e.g., start position and read length per read).
+        Mapping of reference names to read arrays of shape (n_reads, 2),
+        where column 0 is start position and column 1 is read length.
     depth_dict : dict[str, np.ndarray]
-        Dictionary mapping reference names to depth arrays.
+        Mapping of reference names to depth arrays.
     clusters_csv_path : str
-        Path to a CSV file defining clusters. The file must contain
-        two columns: 'sequence' and 'cluster'.
-
+        Path to a CSV file defining clusters with columns: 'sequence', 'cluster'.
+        
     Returns
     -------
     tuple(dict[str, np.ndarray], dict[str, np.ndarray])
-        Updated dictionaries with individual references replaced
-        by their corresponding merged cluster entries.
-
-    Notes
-    -----
-    - Each cluster groups one or more reference sequences.
-    - The resulting depth array for a cluster is the sum of the depths
-      of its member references (up to the maximum sequence length).
-    - The read arrays are vertically stacked for all member sequences.
+        Updated reads_dict and depth_dict where individual references are replaced
+        by their corresponding cluster entries.
     """
     try:
         ref_clusters = pd.read_csv(clusters_csv_path, usecols=[0, 1])
@@ -241,37 +243,43 @@ def apply_clustering_to_dicts(
     # Standardize column names
     ref_clusters.columns = ["sequence", "cluster"]
 
-    # Pre-group sequences by cluster
-    cluster_map = (
-        ref_clusters.groupby("cluster")["sequence"]
-        .apply(list)
-        .to_dict()
-    )
+    # Group sequences by cluster
+    cluster_map = ref_clusters.groupby("cluster")["sequence"].apply(list).to_dict()
 
-    # Process clusters
     for cluster_name, sequences in cluster_map.items():
-        # Find which sequences exist in both dicts
+        # Find sequences that exist in both dictionaries
         present_in_reads = [s for s in sequences if s in reads_dict]
         present_in_depths = [s for s in sequences if s in depth_dict]
         common_sequences = list(set(present_in_reads) & set(present_in_depths))
 
-        # If nothing remains, skip this cluster
         if not common_sequences:
             logging.warning(f"Cluster '{cluster_name}' skipped (no valid sequences found).")
             continue
 
-        # Combine depth arrays (vectorized summation)
-        max_len = max(len(depth_dict[s]) for s in common_sequences)
-        summed_depth = np.zeros(max_len, dtype=np.float32)
+        # Determine cluster length as the shortest sequence
+        min_len = min(len(depth_dict[s]) for s in common_sequences)
+
+        # Sum depth arrays truncated to min_len
+        summed_depth = np.zeros(min_len, dtype=np.float32)
         for s in common_sequences:
             d = depth_dict[s]
-            summed_depth[:len(d)] += d
+            n = min(len(d), min_len)
+            summed_depth[:n] += d[:n]
 
-        # Combine read arrays efficiently
-        if any(len(reads_dict[s]) > 0 for s in common_sequences):
-            reads_combined = np.vstack(
-                [reads_dict[s] for s in common_sequences if len(reads_dict[s]) > 0]
-            )
+        # Combine read arrays and truncate reads that extend beyond min_len
+        read_arrays = []
+        for s in common_sequences:
+            reads = reads_dict[s]
+            if len(reads) == 0:
+                continue
+            # Keep reads that start before min_len
+            reads = reads[reads[:, 0] < min_len].copy()
+            # Truncate read lengths if they extend beyond min_len
+            reads[:, 1] = np.minimum(reads[:, 1], min_len - reads[:, 0])
+            read_arrays.append(reads)
+
+        if read_arrays:
+            reads_combined = np.vstack(read_arrays)
         else:
             reads_combined = np.empty((0, 2), dtype=np.int32)
 
@@ -284,9 +292,65 @@ def apply_clustering_to_dicts(
         depth_dict[cluster_name] = summed_depth
         reads_dict[cluster_name] = reads_combined
 
-        logging.debug(f"Cluster '{cluster_name}' merged ({len(common_sequences)} refs)")
+        logging.debug(f"Cluster '{cluster_name}' merged ({len(common_sequences)} refs, length={min_len})")
 
     return reads_dict, depth_dict
+
+    # try:
+    #     ref_clusters = pd.read_csv(clusters_csv_path, usecols=[0, 1])
+    # except Exception as e:
+    #     logging.error(f"Failed to read cluster CSV: {clusters_csv_path}")
+    #     raise RuntimeError(f"Error reading {clusters_csv_path}: {e}")
+
+    # # Standardize column names
+    # ref_clusters.columns = ["sequence", "cluster"]
+
+    # # Pre-group sequences by cluster
+    # cluster_map = (
+    #     ref_clusters.groupby("cluster")["sequence"]
+    #     .apply(list)
+    #     .to_dict()
+    # )
+
+    # # Process clusters
+    # for cluster_name, sequences in cluster_map.items():
+    #     # Find which sequences exist in both dicts
+    #     present_in_reads = [s for s in sequences if s in reads_dict]
+    #     present_in_depths = [s for s in sequences if s in depth_dict]
+    #     common_sequences = list(set(present_in_reads) & set(present_in_depths))
+
+    #     # If nothing remains, skip this cluster
+    #     if not common_sequences:
+    #         logging.warning(f"Cluster '{cluster_name}' skipped (no valid sequences found).")
+    #         continue
+
+    #     # Combine depth arrays (vectorized summation)
+    #     max_len = max(len(depth_dict[s]) for s in common_sequences)
+    #     summed_depth = np.zeros(max_len, dtype=np.float32)
+    #     for s in common_sequences:
+    #         d = depth_dict[s]
+    #         summed_depth[:len(d)] += d
+
+    #     # Combine read arrays efficiently
+    #     if any(len(reads_dict[s]) > 0 for s in common_sequences):
+    #         reads_combined = np.vstack(
+    #             [reads_dict[s] for s in common_sequences if len(reads_dict[s]) > 0]
+    #         )
+    #     else:
+    #         reads_combined = np.empty((0, 2), dtype=np.int32)
+
+    #     # Remove individual sequences to save memory
+    #     for s in common_sequences:
+    #         reads_dict.pop(s, None)
+    #         depth_dict.pop(s, None)
+
+    #     # Add cluster-level data
+    #     depth_dict[cluster_name] = summed_depth
+    #     reads_dict[cluster_name] = reads_combined
+
+    #     logging.debug(f"Cluster '{cluster_name}' merged ({len(common_sequences)} refs)")
+
+    # return reads_dict, depth_dict
 
 def apply_binning_to_dicts(
     reads_dict: Dict[str, np.ndarray],
@@ -468,11 +532,11 @@ def MC_simulation_for_raw_depth(
 
                 raw_depth_list.append(_get_raw_depth(sim_depths))
 
-    raw_mean = float(np.mean(raw_depth_list))
+    raw_depth = float(np.mean(raw_depth_list))
     raw_lower_ci = float(np.percentile(raw_depth_list, 2.5))
-    raw_upper_ci = max(raw_mean, float(np.percentile(raw_depth_list, 97.5)))
+    raw_upper_ci = max(raw_depth, float(np.percentile(raw_depth_list, 97.5)))
 
-    return raw_mean, raw_lower_ci, raw_upper_ci
+    return raw_depth, raw_lower_ci, raw_upper_ci
 
 def process_bam_file(
     bam_file: str,
@@ -538,7 +602,7 @@ def process_bam_file(
     for ref, reads_array in reads_dict.items():
         if reads_array.shape[0] == 0:
             continue
-        raw_mean, raw_lower_ci, raw_upper_ci = MC_simulation_for_raw_depth(
+        raw_depth, raw_lower_ci, raw_upper_ci = MC_simulation_for_raw_depth(
             depth_dict[ref],
             reads_array,
             n_simulations=n_simulations,
@@ -546,9 +610,9 @@ def process_bam_file(
             batch_size=batch_size
         )
         result_rows.append({
-            "Sample": sample_name,
-            "Reference": ref,
-            "raw_mean": raw_mean,
+            "sample": sample_name,
+            "reference": ref,
+            "raw_depth": raw_depth,
             "raw_lower_ci": raw_lower_ci,
             "raw_upper_ci": raw_upper_ci,
         })

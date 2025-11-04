@@ -12,6 +12,7 @@ import logging
 import os
 import subprocess
 
+import numpy as np
 import pandas as pd
 
 from .fileutils import list_bam_files
@@ -96,6 +97,12 @@ def main() -> None:
         "--dna_mass",
         required=True,
         help="CSV file containing measured DNA mass (in ng).",
+    )
+    parser.add_argument(
+        "--qubit_error",
+        type=float,
+        default=0.045,
+        help="Qubit error (default: 0.045).",
     )
     parser.add_argument(
         "--scaling_factors",
@@ -190,6 +197,7 @@ def main() -> None:
     reference_clusters_csv = args.reference_clusters
     reference_bins_csv = args.reference_bins
     min_read_perc_identity = args.perc_ident
+    qubit_error = args.qubit_error
     scaling_factors_file = args.scaling_factors
     output_dir = os.path.dirname(args.output)
 
@@ -232,7 +240,7 @@ def main() -> None:
     # ----------------------
     # Compute scaling factors
     # ----------------------
-    samples = set(depths_with_errors.Sample)
+    samples = set(depths_with_errors["sample"])
     scaling_factors = calculate_scaling_factors(
         samples=samples,
         bam_files=bam_files,
@@ -242,21 +250,51 @@ def main() -> None:
     )
 
     # ----------------------
-    # Apply calibration
+    # Apply Qubit error and calibrate depth estimates
     # ----------------------
-    logging.info("Calibrating depth estimates...")
+    logging.info("Applying Qubit error and calibrating depth estimates...")
 
-    depths_with_errors["scaling_factor"] = depths_with_errors["Sample"].map(scaling_factors)
+    # Apply Qubit error and calibration
+    depths_with_errors = (
+        depths_with_errors
+        .assign(
+            # Asymmetric relative errors (before Qubit correction)
+            relative_error_down=lambda df: (df["raw_depth"] - df["raw_lower_ci"]) / df["raw_depth"],
+            relative_error_up=lambda df: (df["raw_upper_ci"] - df["raw_depth"]) / df["raw_depth"],
 
-    depths_with_errors["calibrated_depth"] = (
-        depths_with_errors["raw_mean"] * depths_with_errors["scaling_factor"]
+            # Raw absolute errors
+            raw_error_down=lambda df: df["raw_depth"] * df["relative_error_down"],
+            raw_error_up=lambda df: df["raw_depth"] * df["relative_error_up"],
+
+            # Combine uncertainty with Qubit measurement error
+            total_relative_error_down=lambda df: np.sqrt(df["relative_error_down"]**2 + qubit_error**2),
+            total_relative_error_up=lambda df: np.sqrt(df["relative_error_up"]**2 + qubit_error**2),
+
+            # Map scaling factors and apply calibration
+            scaling_factor=lambda df: df["sample"].map(scaling_factors),
+            calibrated_depth=lambda df: df["raw_depth"] * df["scaling_factor"],
+
+            # Propagate errors through calibration
+            calibrated_error_down=lambda df: df["calibrated_depth"] * df["total_relative_error_down"],
+            calibrated_error_up=lambda df: df["calibrated_depth"] * df["total_relative_error_up"],
+        )
+        # Keep only relevant columns for output
+        .loc[
+            :,
+            [
+                "sample",
+                "reference",
+                "raw_depth",
+                "raw_error_down",
+                "raw_error_up",
+                "calibrated_depth",
+                "calibrated_error_down",
+                "calibrated_error_up",
+            ],
+        ]
     )
-    depths_with_errors["calibrated_lower_ci"] = (
-        depths_with_errors["raw_lower_ci"] * depths_with_errors["scaling_factor"]
-    )
-    depths_with_errors["calibrated_upper_ci"] = (
-        depths_with_errors["raw_upper_ci"] * depths_with_errors["scaling_factor"]
-    )
+
+    logging.info("Qubit error propagation and calibration complete.")
 
     # ----------------------
     # Save output
