@@ -200,11 +200,6 @@ def get_reads_dict_from_bam(bam_path: str) -> Dict[str, np.ndarray]:
 
     return reads_dict
 
-from typing import Dict, Tuple
-import numpy as np
-import pandas as pd
-import logging
-
 def apply_clustering_to_dicts(
     reads_dict: Dict[str, np.ndarray],
     depth_dict: Dict[str, np.ndarray],

@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "MGCalibrator"
+version = "0.1"
+description = "CLI tool for computing absolute abundances in metagenomic BAM files"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [
+    { name = "Nimrod de Wit", email = "nimrod.de.wit@rivm.nl" }
+]
+urls = { "Homepage" = "https://github.com/NimroddeWit/MGCalibrator" }
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Intended Audience :: Science/Research"
+]
+
+dependencies = [
+    "pandas>=1.5",
+    "numpy>=1.24",
+    "matplotlib>=3.7",
+    "seaborn>=0.12",
+    "pysam>=0.20",
+    "biopython"
+]
+
+[project.scripts]
+mgcalibrator = "MGCalibrator.cli:main"

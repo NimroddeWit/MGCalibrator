@@ -9,7 +9,8 @@ setup(
         'numpy>=1.24',
         'matplotlib>=3.7',
         'seaborn>=0.12',
-        'pysam>=0.20'
+        'pysam>=0.20',
+        'biopython',
     ],
     entry_points={
         'console_scripts': [

@@ -1,6 +1,7 @@
 biopython
-pandas
-numpy
-matplotlib
-seaborn
+pandas>=1.5
+numpy>=1.24
+matplotlib>=3.7
 coverm
+pysam>=0.20
+samtools
