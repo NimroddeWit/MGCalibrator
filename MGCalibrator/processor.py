@@ -184,7 +184,7 @@ def get_reads_dict_from_bam(bam_path: str) -> Dict[str, np.ndarray]:
                     reads_dict[ref_name] = []
 
                 reads_dict[ref_name].append(
-                    (read.reference_start, read.query_length)
+                    (read.reference_start, read.reference_length)
                 )
 
         # Convert lists to compact NumPy arrays
@@ -235,14 +235,10 @@ def apply_clustering_to_dicts(
         logging.error(f"Failed to read cluster CSV: {clusters_csv_path}")
         raise RuntimeError(f"Error reading {clusters_csv_path}: {e}")
 
-    # Standardize column names
     ref_clusters.columns = ["sequence", "cluster"]
-
-    # Group sequences by cluster
     cluster_map = ref_clusters.groupby("cluster")["sequence"].apply(list).to_dict()
 
     for cluster_name, sequences in cluster_map.items():
-        # Find sequences that exist in both dictionaries
         present_in_reads = [s for s in sequences if s in reads_dict]
         present_in_depths = [s for s in sequences if s in depth_dict]
         common_sequences = list(set(present_in_reads) & set(present_in_depths))
@@ -251,101 +247,269 @@ def apply_clustering_to_dicts(
             logging.warning(f"Cluster '{cluster_name}' skipped (no valid sequences found).")
             continue
 
-        # Determine cluster length as the shortest sequence
+        # shortest reference length in the cluster
         min_len = min(len(depth_dict[s]) for s in common_sequences)
 
-        # Sum depth arrays truncated to min_len
         summed_depth = np.zeros(min_len, dtype=np.float32)
+        read_arrays = []
+
         for s in common_sequences:
             d = depth_dict[s]
-            n = min(len(d), min_len)
-            summed_depth[:n] += d[:n]
+            L = len(d)
+            shift = (L - min_len) // 2  # how much we cut from the left
 
-        # Combine read arrays and truncate reads that extend beyond min_len
-        read_arrays = []
-        for s in common_sequences:
+            # center slice for depth
+            d_centered = d[shift:shift + min_len]
+            summed_depth += d_centered
+
+            # logging.debug(f"single depth: {d}")
+            # logging.debug(f"single depth sum: {np.sum(d)}")
+            # logging.debug(f"single depth length: {len(d)}")
+
+            # process reads
             reads = reads_dict[s]
             if len(reads) == 0:
                 continue
-            # Keep reads that start before min_len
-            reads = reads[reads[:, 0] < min_len].copy()
-            # Truncate read lengths if they extend beyond min_len
-            reads[:, 1] = np.minimum(reads[:, 1], min_len - reads[:, 0])
-            read_arrays.append(reads)
 
-        if read_arrays:
-            reads_combined = np.vstack(read_arrays)
-        else:
-            reads_combined = np.empty((0, 2), dtype=np.int32)
+            # logging.debug(f"single reads: {reads}")
 
-        # Remove individual sequences to save memory
+            # Shift reads
+            starts = reads[:, 0] - shift
+            ends = starts + reads[:, 1]
+
+            # Clip to [0, min_len)
+            new_starts = np.clip(starts, 0, min_len)
+            new_ends = np.clip(ends, 0, min_len)
+            new_lengths = new_ends - new_starts
+
+            # Keep only reads that still have positive length
+            mask = new_lengths > 0
+            reads_centered = np.column_stack((new_starts[mask], new_lengths[mask])).astype(np.int32)
+
+            read_arrays.append(reads_centered)
+
+        # Combine all reads for this cluster
+        reads_combined = np.vstack(read_arrays) if read_arrays else np.empty((0, 2), dtype=np.int32)
+
+        # Remove individual sequences
         for s in common_sequences:
             reads_dict.pop(s, None)
             depth_dict.pop(s, None)
 
-        # Add cluster-level data
+        # Add merged cluster
         depth_dict[cluster_name] = summed_depth
         reads_dict[cluster_name] = reads_combined
 
-        logging.debug(f"Cluster '{cluster_name}' merged ({len(common_sequences)} refs, length={min_len})")
+        # logging.debug(f"summed_depth: {summed_depth}")
+        # logging.debug(f"summed_depth sum: {np.sum(summed_depth)}")
+        # logging.debug(f"summed_depth length: {len(summed_depth)}")
+        # logging.debug(f"reads_combined: {reads_combined}")
+
+        logging.debug(f"Cluster '{cluster_name}' merged (centered, {len(common_sequences)} refs, length={min_len})")
 
     return reads_dict, depth_dict
 
-    # try:
-    #     ref_clusters = pd.read_csv(clusters_csv_path, usecols=[0, 1])
-    # except Exception as e:
-    #     logging.error(f"Failed to read cluster CSV: {clusters_csv_path}")
-    #     raise RuntimeError(f"Error reading {clusters_csv_path}: {e}")
+# def apply_clustering_to_dicts(
+#     reads_dict: Dict[str, np.ndarray],
+#     depth_dict: Dict[str, np.ndarray],
+#     clusters_csv_path: str
+# ) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]:
+#     """
+#     Merge reference-level read and depth data into clusters defined in a CSV file,
+#     aligning references by their centers (not left edges).
 
-    # # Standardize column names
-    # ref_clusters.columns = ["sequence", "cluster"]
+#     Each cluster is assigned the length of the shortest reference sequence in that cluster.
+#     Reads and depth arrays are truncated accordingly:
+#       - Depth arrays are summed up around the center.
+#       - Read start positions are shifted to match the centered alignment.
+#     """
+#     try:
+#         ref_clusters = pd.read_csv(clusters_csv_path, usecols=[0, 1])
+#     except Exception as e:
+#         logging.error(f"Failed to read cluster CSV: {clusters_csv_path}")
+#         raise RuntimeError(f"Error reading {clusters_csv_path}: {e}")
 
-    # # Pre-group sequences by cluster
-    # cluster_map = (
-    #     ref_clusters.groupby("cluster")["sequence"]
-    #     .apply(list)
-    #     .to_dict()
-    # )
+#     ref_clusters.columns = ["sequence", "cluster"]
+#     cluster_map = ref_clusters.groupby("cluster")["sequence"].apply(list).to_dict()
 
-    # # Process clusters
-    # for cluster_name, sequences in cluster_map.items():
-    #     # Find which sequences exist in both dicts
-    #     present_in_reads = [s for s in sequences if s in reads_dict]
-    #     present_in_depths = [s for s in sequences if s in depth_dict]
-    #     common_sequences = list(set(present_in_reads) & set(present_in_depths))
+#     for cluster_name, sequences in cluster_map.items():
+#         present_in_reads = [s for s in sequences if s in reads_dict]
+#         present_in_depths = [s for s in sequences if s in depth_dict]
+#         common_sequences = list(set(present_in_reads) & set(present_in_depths))
 
-    #     # If nothing remains, skip this cluster
-    #     if not common_sequences:
-    #         logging.warning(f"Cluster '{cluster_name}' skipped (no valid sequences found).")
-    #         continue
+#         if not common_sequences:
+#             logging.warning(f"Cluster '{cluster_name}' skipped (no valid sequences found).")
+#             continue
 
-    #     # Combine depth arrays (vectorized summation)
-    #     max_len = max(len(depth_dict[s]) for s in common_sequences)
-    #     summed_depth = np.zeros(max_len, dtype=np.float32)
-    #     for s in common_sequences:
-    #         d = depth_dict[s]
-    #         summed_depth[:len(d)] += d
+#         # Shortest reference length in the cluster
+#         min_len = min(len(depth_dict[s]) for s in common_sequences)
 
-    #     # Combine read arrays efficiently
-    #     if any(len(reads_dict[s]) > 0 for s in common_sequences):
-    #         reads_combined = np.vstack(
-    #             [reads_dict[s] for s in common_sequences if len(reads_dict[s]) > 0]
-    #         )
-    #     else:
-    #         reads_combined = np.empty((0, 2), dtype=np.int32)
+#         summed_depth = np.zeros(min_len, dtype=np.float32)
+#         read_arrays = []
 
-    #     # Remove individual sequences to save memory
-    #     for s in common_sequences:
-    #         reads_dict.pop(s, None)
-    #         depth_dict.pop(s, None)
+#         for s in common_sequences:
+#             d = depth_dict[s]
+#             L = len(d)
 
-    #     # Add cluster-level data
-    #     depth_dict[cluster_name] = summed_depth
-    #     reads_dict[cluster_name] = reads_combined
+#             logging.debug(f"single depth: {d}")
+#             logging.debug(f"single depth sum: {np.sum(d)}")
+#             logging.debug(f"single depth length: {len(d)}")
 
-    #     logging.debug(f"Cluster '{cluster_name}' merged ({len(common_sequences)} refs)")
+#             # Determine centered slice
+#             shift = (L - min_len) // 2
+#             start = shift
+#             end = start + min_len
 
-    # return reads_dict, depth_dict
+#             # Centered slice of depth
+#             d_centered = d[start:end]
+
+#             summed_depth += d_centered
+
+#             # Reads processing
+#             reads = reads_dict[s]
+
+#             logging.debug(f"single reads: {reads}")
+
+#             if len(reads) == 0:
+#                 continue
+
+#             # Shift read start positions to new coordinates (remove left part)
+#             reads_centered = reads.copy()
+#             reads_centered[:, 0] -= shift  # shift left
+#             # Keep only reads that still fall (partially) inside the new [0, min_len] region
+#             mask = (reads_centered[:, 0] + reads_centered[:, 1] > 0) & (reads_centered[:, 0] < min_len)
+#             reads_centered = reads_centered[mask]
+
+#             # Clip starts and lengths to stay inside [0, min_len]
+#             reads_centered[:, 0] = np.clip(reads_centered[:, 0], 0, min_len)
+#             reads_centered[:, 1] = np.minimum(reads_centered[:, 1], min_len - reads_centered[:, 0])
+
+#             read_arrays.append(reads_centered)
+
+#         reads_combined = np.vstack(read_arrays) if read_arrays else np.empty((0, 2), dtype=np.int32)
+
+#         # remove old sequences
+#         for s in common_sequences:
+#             reads_dict.pop(s, None)
+#             depth_dict.pop(s, None)
+
+#         # add merged cluster
+#         depth_dict[cluster_name] = summed_depth
+#         reads_dict[cluster_name] = reads_combined
+
+#         logging.debug(f"summed_depth: {summed_depth}")
+#         logging.debug(f"summed_depth sum: {np.sum(summed_depth)}")
+#         logging.debug(f"summed_depth length: {len(summed_depth)}")
+#         logging.debug(f"reads_combined: {reads_combined}")
+
+
+#         logging.debug(f"Cluster '{cluster_name}' merged (centered, {len(common_sequences)} refs, length={min_len})")
+
+#     return reads_dict, depth_dict
+
+
+#  def apply_clustering_to_dicts(
+#     reads_dict: Dict[str, np.ndarray],
+#     depth_dict: Dict[str, np.ndarray],
+#     clusters_csv_path: str
+# ) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]:
+#     """
+#     Merge reference-level read and depth data into clusters defined in a CSV file.
+    
+#     Each cluster is assigned the length of the shortest reference sequence in that cluster.
+#     Reads and depth arrays are truncated accordingly:
+#       - Depth arrays are summed up to the minimum length.
+#       - Reads that extend beyond the cluster length are truncated to fit.
+    
+#     Parameters
+#     ----------
+#     reads_dict : dict[str, np.ndarray]
+#         Mapping of reference names to read arrays of shape (n_reads, 2),
+#         where column 0 is start position and column 1 is read length.
+#     depth_dict : dict[str, np.ndarray]
+#         Mapping of reference names to depth arrays.
+#     clusters_csv_path : str
+#         Path to a CSV file defining clusters with columns: 'sequence', 'cluster'.
+        
+#     Returns
+#     -------
+#     tuple(dict[str, np.ndarray], dict[str, np.ndarray])
+#         Updated reads_dict and depth_dict where individual references are replaced
+#         by their corresponding cluster entries.
+#     """
+#     try:
+#         ref_clusters = pd.read_csv(clusters_csv_path, usecols=[0, 1])
+#     except Exception as e:
+#         logging.error(f"Failed to read cluster CSV: {clusters_csv_path}")
+#         raise RuntimeError(f"Error reading {clusters_csv_path}: {e}")
+
+#     # Standardize column names
+#     ref_clusters.columns = ["sequence", "cluster"]
+
+#     # Group sequences by cluster
+#     cluster_map = ref_clusters.groupby("cluster")["sequence"].apply(list).to_dict()
+
+#     for cluster_name, sequences in cluster_map.items():
+#         # Find sequences that exist in both dictionaries
+#         present_in_reads = [s for s in sequences if s in reads_dict]
+#         present_in_depths = [s for s in sequences if s in depth_dict]
+#         common_sequences = list(set(present_in_reads) & set(present_in_depths))
+
+#         if not common_sequences:
+#             logging.warning(f"Cluster '{cluster_name}' skipped (no valid sequences found).")
+#             continue
+
+#         # Determine cluster length as the shortest sequence
+#         min_len = min(len(depth_dict[s]) for s in common_sequences)
+
+#         # Sum depth arrays truncated to min_len
+#         summed_depth = np.zeros(min_len, dtype=np.float32)
+#         for s in common_sequences:
+#             d = depth_dict[s]
+#             n = min(len(d), min_len)
+#             summed_depth[:n] += d[:n]
+
+#             logging.debug(f"single depth: {d}")
+#             logging.debug(f"single depth sum: {np.sum(d)}")
+#             logging.debug(f"single depth length: {len(d)}")
+
+#         # Combine read arrays and truncate reads that extend beyond min_len
+#         read_arrays = []
+#         for s in common_sequences:
+#             reads = reads_dict[s]
+
+#             # logging.debug(f"single reads: {reads}")
+
+#             if len(reads) == 0:
+#                 continue
+#             # Keep reads that start before min_len
+#             reads = reads[reads[:, 0] < min_len].copy()
+#             # Truncate read lengths if they extend beyond min_len
+#             reads[:, 1] = np.minimum(reads[:, 1], min_len - reads[:, 0])
+#             read_arrays.append(reads)
+
+#         if read_arrays:
+#             reads_combined = np.vstack(read_arrays)
+#         else:
+#             reads_combined = np.empty((0, 2), dtype=np.int32)
+
+#         # Remove individual sequences to save memory
+#         for s in common_sequences:
+#             reads_dict.pop(s, None)
+#             depth_dict.pop(s, None)
+
+#         # Add cluster-level data
+#         depth_dict[cluster_name] = summed_depth
+#         reads_dict[cluster_name] = reads_combined
+
+#         logging.debug(f"summed_depth: {summed_depth}")
+#         logging.debug(f"summed_depth sum: {np.sum(summed_depth)}")
+#         logging.debug(f"summed_depth length: {len(summed_depth)}")
+#         # logging.debug(f"reads_combined: {reads_combined}")
+
+#         logging.debug(f"Cluster '{cluster_name}' merged ({len(common_sequences)} refs, length={min_len})")
+
+#     return reads_dict, depth_dict
 
 def apply_binning_to_dicts(
     reads_dict: Dict[str, np.ndarray],
