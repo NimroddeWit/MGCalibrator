@@ -173,11 +173,11 @@ def get_reads_dict_from_bam(bam_path: str) -> Dict[str, np.ndarray]:
         with pysam.AlignmentFile(bam_path, "rb") as bamfile:
             # Initialize lists for all references only when needed
             for read in bamfile.fetch(until_eof=True):
-                ref_id = read.reference_id
-                if ref_id < 0:
-                    # Unmapped reads have reference_id == -1
+                # Skip unmapped reads
+                if read.is_unmapped:
                     continue
-
+                
+                ref_id = read.reference_id
                 ref_name = bamfile.get_reference_name(ref_id)
                 # Lazily create list for each reference
                 if ref_name not in reads_dict:
