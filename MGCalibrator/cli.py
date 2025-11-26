@@ -101,8 +101,8 @@ def main() -> None:
     parser.add_argument(
         "--qubit_error",
         type=float,
-        default=0.045,
-        help="Qubit error (default: 0.045).",
+        default=0.0,
+        help="Qubit error (default: 0.0).",
     )
     parser.add_argument(
         "--scaling_factors",
