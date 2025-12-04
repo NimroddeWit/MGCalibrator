@@ -21,14 +21,41 @@ import pysam
 from .parser import calculate_total_base_pairs
 
 
-def _get_depth(depth_list):
-    depths = np.sort(np.array(depth_list))
+def get_mean_central_depth(depth_values, keep_percent):
+    """
+    Compute the mean depth of the central portion of the data,
+    keeping the specified percentage (centered), and trimming the rest
+    from both tails.
+
+    Parameters
+    ----------
+    depth_values : list or array-like
+        Depth values to summarize.
+    keep_percent : float
+        Percentage of values to keep (centered in the distribution).
+        Example: 50 keeps the central 50% -> cuts 25% from each side.
+
+    Returns
+    -------
+    float
+        Mean depth of the central kept portion.
+    """
+    depths = np.sort(np.asarray(depth_values))
     n = len(depths)
-    q1_idx = int(0.25 * n)
-    q3_idx = int(0.75 * n)
-    iqr_depths = depths[q1_idx:q3_idx+1]
-    iqm = np.mean(iqr_depths)
-    return iqm
+
+    # Fraction to keep expressed as 0–1
+    keep_fraction = keep_percent / 100.0
+
+    # Fractions to cut from each side
+    trim_fraction = (1 - keep_fraction) / 2.0
+
+    # Convert to index boundaries
+    start_idx = int(trim_fraction * n)
+    end_idx = int((1 - trim_fraction) * n)
+
+    central_depths = depths[start_idx:end_idx]
+    return np.mean(central_depths)
+
 
 def run_coverm_filter(
     bam_files: List[str],
@@ -256,15 +283,11 @@ def apply_clustering_to_dicts(
         for s in common_sequences:
             d = depth_dict[s]
             L = len(d)
-            shift = (L - min_len) // 2  # how much we cut from the left
+            shift = (L - min_len) // 2
 
             # center slice for depth
             d_centered = d[shift:shift + min_len]
             summed_depth += d_centered
-
-            # logging.debug(f"single depth: {d}")
-            # logging.debug(f"single depth sum: {np.sum(d)}")
-            # logging.debug(f"single depth length: {len(d)}")
 
             # process reads
             reads = reads_dict[s]
@@ -300,216 +323,9 @@ def apply_clustering_to_dicts(
         depth_dict[cluster_name] = summed_depth
         reads_dict[cluster_name] = reads_combined
 
-        # logging.debug(f"summed_depth: {summed_depth}")
-        # logging.debug(f"summed_depth sum: {np.sum(summed_depth)}")
-        # logging.debug(f"summed_depth length: {len(summed_depth)}")
-        # logging.debug(f"reads_combined: {reads_combined}")
-
         logging.debug(f"Cluster '{cluster_name}' merged (centered, {len(common_sequences)} refs, length={min_len})")
 
     return reads_dict, depth_dict
-
-# def apply_clustering_to_dicts(
-#     reads_dict: Dict[str, np.ndarray],
-#     depth_dict: Dict[str, np.ndarray],
-#     clusters_csv_path: str
-# ) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]:
-#     """
-#     Merge reference-level read and depth data into clusters defined in a CSV file,
-#     aligning references by their centers (not left edges).
-
-#     Each cluster is assigned the length of the shortest reference sequence in that cluster.
-#     Reads and depth arrays are truncated accordingly:
-#       - Depth arrays are summed up around the center.
-#       - Read start positions are shifted to match the centered alignment.
-#     """
-#     try:
-#         ref_clusters = pd.read_csv(clusters_csv_path, usecols=[0, 1])
-#     except Exception as e:
-#         logging.error(f"Failed to read cluster CSV: {clusters_csv_path}")
-#         raise RuntimeError(f"Error reading {clusters_csv_path}: {e}")
-
-#     ref_clusters.columns = ["sequence", "cluster"]
-#     cluster_map = ref_clusters.groupby("cluster")["sequence"].apply(list).to_dict()
-
-#     for cluster_name, sequences in cluster_map.items():
-#         present_in_reads = [s for s in sequences if s in reads_dict]
-#         present_in_depths = [s for s in sequences if s in depth_dict]
-#         common_sequences = list(set(present_in_reads) & set(present_in_depths))
-
-#         if not common_sequences:
-#             logging.warning(f"Cluster '{cluster_name}' skipped (no valid sequences found).")
-#             continue
-
-#         # Shortest reference length in the cluster
-#         min_len = min(len(depth_dict[s]) for s in common_sequences)
-
-#         summed_depth = np.zeros(min_len, dtype=np.float32)
-#         read_arrays = []
-
-#         for s in common_sequences:
-#             d = depth_dict[s]
-#             L = len(d)
-
-#             logging.debug(f"single depth: {d}")
-#             logging.debug(f"single depth sum: {np.sum(d)}")
-#             logging.debug(f"single depth length: {len(d)}")
-
-#             # Determine centered slice
-#             shift = (L - min_len) // 2
-#             start = shift
-#             end = start + min_len
-
-#             # Centered slice of depth
-#             d_centered = d[start:end]
-
-#             summed_depth += d_centered
-
-#             # Reads processing
-#             reads = reads_dict[s]
-
-#             logging.debug(f"single reads: {reads}")
-
-#             if len(reads) == 0:
-#                 continue
-
-#             # Shift read start positions to new coordinates (remove left part)
-#             reads_centered = reads.copy()
-#             reads_centered[:, 0] -= shift  # shift left
-#             # Keep only reads that still fall (partially) inside the new [0, min_len] region
-#             mask = (reads_centered[:, 0] + reads_centered[:, 1] > 0) & (reads_centered[:, 0] < min_len)
-#             reads_centered = reads_centered[mask]
-
-#             # Clip starts and lengths to stay inside [0, min_len]
-#             reads_centered[:, 0] = np.clip(reads_centered[:, 0], 0, min_len)
-#             reads_centered[:, 1] = np.minimum(reads_centered[:, 1], min_len - reads_centered[:, 0])
-
-#             read_arrays.append(reads_centered)
-
-#         reads_combined = np.vstack(read_arrays) if read_arrays else np.empty((0, 2), dtype=np.int32)
-
-#         # remove old sequences
-#         for s in common_sequences:
-#             reads_dict.pop(s, None)
-#             depth_dict.pop(s, None)
-
-#         # add merged cluster
-#         depth_dict[cluster_name] = summed_depth
-#         reads_dict[cluster_name] = reads_combined
-
-#         logging.debug(f"summed_depth: {summed_depth}")
-#         logging.debug(f"summed_depth sum: {np.sum(summed_depth)}")
-#         logging.debug(f"summed_depth length: {len(summed_depth)}")
-#         logging.debug(f"reads_combined: {reads_combined}")
-
-
-#         logging.debug(f"Cluster '{cluster_name}' merged (centered, {len(common_sequences)} refs, length={min_len})")
-
-#     return reads_dict, depth_dict
-
-
-#  def apply_clustering_to_dicts(
-#     reads_dict: Dict[str, np.ndarray],
-#     depth_dict: Dict[str, np.ndarray],
-#     clusters_csv_path: str
-# ) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]:
-#     """
-#     Merge reference-level read and depth data into clusters defined in a CSV file.
-    
-#     Each cluster is assigned the length of the shortest reference sequence in that cluster.
-#     Reads and depth arrays are truncated accordingly:
-#       - Depth arrays are summed up to the minimum length.
-#       - Reads that extend beyond the cluster length are truncated to fit.
-    
-#     Parameters
-#     ----------
-#     reads_dict : dict[str, np.ndarray]
-#         Mapping of reference names to read arrays of shape (n_reads, 2),
-#         where column 0 is start position and column 1 is read length.
-#     depth_dict : dict[str, np.ndarray]
-#         Mapping of reference names to depth arrays.
-#     clusters_csv_path : str
-#         Path to a CSV file defining clusters with columns: 'sequence', 'cluster'.
-        
-#     Returns
-#     -------
-#     tuple(dict[str, np.ndarray], dict[str, np.ndarray])
-#         Updated reads_dict and depth_dict where individual references are replaced
-#         by their corresponding cluster entries.
-#     """
-#     try:
-#         ref_clusters = pd.read_csv(clusters_csv_path, usecols=[0, 1])
-#     except Exception as e:
-#         logging.error(f"Failed to read cluster CSV: {clusters_csv_path}")
-#         raise RuntimeError(f"Error reading {clusters_csv_path}: {e}")
-
-#     # Standardize column names
-#     ref_clusters.columns = ["sequence", "cluster"]
-
-#     # Group sequences by cluster
-#     cluster_map = ref_clusters.groupby("cluster")["sequence"].apply(list).to_dict()
-
-#     for cluster_name, sequences in cluster_map.items():
-#         # Find sequences that exist in both dictionaries
-#         present_in_reads = [s for s in sequences if s in reads_dict]
-#         present_in_depths = [s for s in sequences if s in depth_dict]
-#         common_sequences = list(set(present_in_reads) & set(present_in_depths))
-
-#         if not common_sequences:
-#             logging.warning(f"Cluster '{cluster_name}' skipped (no valid sequences found).")
-#             continue
-
-#         # Determine cluster length as the shortest sequence
-#         min_len = min(len(depth_dict[s]) for s in common_sequences)
-
-#         # Sum depth arrays truncated to min_len
-#         summed_depth = np.zeros(min_len, dtype=np.float32)
-#         for s in common_sequences:
-#             d = depth_dict[s]
-#             n = min(len(d), min_len)
-#             summed_depth[:n] += d[:n]
-
-#             logging.debug(f"single depth: {d}")
-#             logging.debug(f"single depth sum: {np.sum(d)}")
-#             logging.debug(f"single depth length: {len(d)}")
-
-#         # Combine read arrays and truncate reads that extend beyond min_len
-#         read_arrays = []
-#         for s in common_sequences:
-#             reads = reads_dict[s]
-
-#             # logging.debug(f"single reads: {reads}")
-
-#             if len(reads) == 0:
-#                 continue
-#             # Keep reads that start before min_len
-#             reads = reads[reads[:, 0] < min_len].copy()
-#             # Truncate read lengths if they extend beyond min_len
-#             reads[:, 1] = np.minimum(reads[:, 1], min_len - reads[:, 0])
-#             read_arrays.append(reads)
-
-#         if read_arrays:
-#             reads_combined = np.vstack(read_arrays)
-#         else:
-#             reads_combined = np.empty((0, 2), dtype=np.int32)
-
-#         # Remove individual sequences to save memory
-#         for s in common_sequences:
-#             reads_dict.pop(s, None)
-#             depth_dict.pop(s, None)
-
-#         # Add cluster-level data
-#         depth_dict[cluster_name] = summed_depth
-#         reads_dict[cluster_name] = reads_combined
-
-#         logging.debug(f"summed_depth: {summed_depth}")
-#         logging.debug(f"summed_depth sum: {np.sum(summed_depth)}")
-#         logging.debug(f"summed_depth length: {len(summed_depth)}")
-#         # logging.debug(f"reads_combined: {reads_combined}")
-
-#         logging.debug(f"Cluster '{cluster_name}' merged ({len(common_sequences)} refs, length={min_len})")
-
-#     return reads_dict, depth_dict
 
 def apply_binning_to_dicts(
     reads_dict: Dict[str, np.ndarray],
@@ -613,6 +429,7 @@ def apply_binning_to_dicts(
 def MC_simulation_for_depth(
     depths: np.ndarray,
     reads: np.ndarray,
+    depth_percent: float = 50.0,
     n_simulations: int = 1000,
     pseudocount: int = 1,
     batch_size: int = 500,
@@ -626,6 +443,8 @@ def MC_simulation_for_depth(
         Array of depth per genomic position (shape: genome_length,).
     reads : np.ndarray
         Array of mapped reads with columns [start, length] (shape: n_reads, 2).
+    depth_percent : float
+        Percentage of middle depth values to include for depth calculation.
     n_simulations : int, optional
         Number of simulations to run, by default 1000.
     pseudocount : int, optional
@@ -659,7 +478,7 @@ def MC_simulation_for_depth(
 
             n_reads = abs(n)
             if n_reads == 0:
-                depth_list.append(_get_depth(sim_depths))
+                depth_list.append(get_mean_central_depth(sim_depths, depth_percent))
                 continue
 
             if n < 0:
@@ -670,7 +489,7 @@ def MC_simulation_for_depth(
                 remove_lengths = reads[indices_to_remove, 1]
                 for start, length in zip(remove_starts, remove_lengths):
                     sim_depths[start:start+length] -= 1
-                depth_list.append(_get_depth(sim_depths))
+                depth_list.append(get_mean_central_depth(sim_depths, depth_percent))
 
             else:
                 # Add reads
@@ -689,7 +508,7 @@ def MC_simulation_for_depth(
                 for pos, length in zip(positions_to_add, lengths_to_add):
                     sim_depths[pos:pos+length] += 1
 
-                depth_list.append(_get_depth(sim_depths))
+                depth_list.append(get_mean_central_depth(sim_depths, depth_percent))
 
     depth = float(np.mean(depth_list))
     lower_ci = float(np.percentile(depth_list, 2.5))
@@ -701,6 +520,7 @@ def process_bam_file(
     bam_file: str,
     reference_clusters_csv: str | None,
     reference_bins_csv: str | None,
+    depth_percent: float,
     n_simulations: int,
     pseudocount: int,
     batch_size: int
@@ -718,6 +538,8 @@ def process_bam_file(
         Path to CSV defining clusters. If None, clustering is skipped.
     reference_bins_csv : str | None
         Path to CSV defining bins. If None, binning is skipped.
+    depth_percent : float
+        Percentage of middle depth values to include for depth calculation.
     n_simulations : int
         Number of Monte Carlo simulations per reference.
     pseudocount : int
@@ -764,6 +586,7 @@ def process_bam_file(
         depth, lower_ci, upper_ci = MC_simulation_for_depth(
             depth_dict[ref],
             reads_array,
+            depth_percent=depth_percent,
             n_simulations=n_simulations,
             pseudocount=pseudocount,
             batch_size=batch_size
@@ -783,6 +606,7 @@ def compute_depths_with_error(
     bam_files_filtered: List[str],
     reference_clusters_csv: Optional[str] = None,
     reference_bins_csv: Optional[str] = None,
+    depth_percent: float = 50.0,
     n_simulations: int = 100,
     pseudocount: int = 1,
     batch_size: int = 500,
@@ -799,6 +623,8 @@ def compute_depths_with_error(
         CSV defining clusters for references. If None, clustering is skipped.
     reference_bins_csv : Optional[str]
         CSV defining bins for references. If None, binning is skipped.
+    depth_percent : float
+        Percentage of middle depth values to include for depth calculation.
     n_simulations : int
         Number of Monte Carlo simulations per reference.
     pseudocount : int
@@ -822,6 +648,7 @@ def compute_depths_with_error(
                 bam_file,
                 reference_clusters_csv,
                 reference_bins_csv,
+                depth_percent,
                 n_simulations,
                 pseudocount,
                 batch_size

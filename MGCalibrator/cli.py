@@ -99,12 +99,6 @@ def main() -> None:
         help="CSV file containing measured DNA mass (in ng).",
     )
     parser.add_argument(
-        "--qubit_error",
-        type=float,
-        default=0.0,
-        help="Qubit error (default: 0.0).",
-    )
-    parser.add_argument(
         "--scaling_factors",
         required=True,
         help="Path to a file storing precomputed scaling factors (if it exists, it will be reused).",
@@ -130,10 +124,24 @@ def main() -> None:
         help="Skip filtering based on mapping identity.",
     )
     parser.add_argument(
-        "--perc_ident",
+        "--filter_percent",
         type=float,
         default=97.0,
         help="Minimum read percent identity for filtering (default: 97).",
+    )
+
+    # --- Calculation options ---
+    parser.add_argument(
+        "--depth_percent",
+        type=float,
+        default=50.0,
+        help="Percentage of middle depth values to include for depth calculation (default: 50).",
+    )
+    parser.add_argument(
+        "--qubit_error",
+        type=float,
+        default=0.0,
+        help="Qubit error (default: 0.0).",
     )
 
     # --- Monte Carlo error propagation ---
@@ -196,7 +204,8 @@ def main() -> None:
 
     reference_clusters_csv = args.reference_clusters
     reference_bins_csv = args.reference_bins
-    min_read_perc_identity = args.perc_ident
+    min_read_perc_identity = args.filter_percent
+    depth_percent = args.depth_percent
     qubit_error = args.qubit_error
     scaling_factors_file = args.scaling_factors
     output_dir = os.path.dirname(args.output)
@@ -231,6 +240,7 @@ def main() -> None:
         bam_files_filtered,
         reference_clusters_csv=reference_clusters_csv,
         reference_bins_csv=reference_bins_csv,
+        depth_percent=depth_percent,
         n_simulations=args.mc_samples,
         pseudocount=args.pseudocount,
         batch_size=args.batch_size,
