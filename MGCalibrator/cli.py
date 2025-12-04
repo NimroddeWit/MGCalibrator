@@ -163,6 +163,11 @@ def main() -> None:
         default=1.0,
         help="Pseudocount for read-mapping probability at zero-depth positions (default: 1.0).",
     )
+    parser.add_argument(
+        "--skip_error_calculation",
+        action="store_true",
+        help="Skip error calculation by Monte Carlo simulation.",
+    )
 
     args = parser.parse_args()
 
@@ -236,11 +241,12 @@ def main() -> None:
     # Compute raw depths with uncertainty
     # ----------------------
     logging.info("Computing raw depths with Monte Carlo error estimation...")
-    depths_with_errors = compute_depths_with_error(
+    calculated_depths = compute_depths_with_error(
         bam_files_filtered,
         reference_clusters_csv=reference_clusters_csv,
         reference_bins_csv=reference_bins_csv,
         depth_percent=depth_percent,
+        skip_error_calculation=args.skip_error_calculation,
         n_simulations=args.mc_samples,
         pseudocount=args.pseudocount,
         batch_size=args.batch_size,
@@ -250,7 +256,7 @@ def main() -> None:
     # ----------------------
     # Compute scaling factors
     # ----------------------
-    samples = set(depths_with_errors["sample"])
+    samples = set(calculated_depths["sample"])
     scaling_factors = calculate_scaling_factors(
         samples=samples,
         bam_files=bam_files,
@@ -265,8 +271,8 @@ def main() -> None:
     logging.info("Applying Qubit error and calibrating depth estimates...")
 
     # Apply Qubit error and calibration
-    depths_with_errors = (
-        depths_with_errors
+    calibrated_depths = (
+        calculated_depths
         .assign(
             # Asymmetric relative errors (before Qubit correction)
             relative_error_down=lambda df: (df["depth"] - df["lower_ci"]) / df["depth"],
@@ -310,7 +316,7 @@ def main() -> None:
     # Save output
     # ----------------------
     os.makedirs(output_dir, exist_ok=True)
-    depths_with_errors.to_csv(args.output, index=False)
+    calibrated_depths.to_csv(args.output, index=False)
     logging.info(f"Results saved to: {args.output}")
 
     # ----------------------

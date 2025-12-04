@@ -56,7 +56,6 @@ def get_mean_central_depth(depth_values, keep_percent):
     central_depths = depths[start_idx:end_idx]
     return np.mean(central_depths)
 
-
 def run_coverm_filter(
     bam_files: List[str],
     min_read_perc_identity: float,
@@ -521,6 +520,7 @@ def process_bam_file(
     reference_clusters_csv: str | None,
     reference_bins_csv: str | None,
     depth_percent: float,
+    skip_error_calculation: bool,
     n_simulations: int,
     pseudocount: int,
     batch_size: int
@@ -540,6 +540,8 @@ def process_bam_file(
         Path to CSV defining bins. If None, binning is skipped.
     depth_percent : float
         Percentage of middle depth values to include for depth calculation.
+    skip_error_calculation : bool
+        Whether or not to skip error calculation via MC simulation.
     n_simulations : int
         Number of Monte Carlo simulations per reference.
     pseudocount : int
@@ -583,14 +585,20 @@ def process_bam_file(
     for ref, reads_array in reads_dict.items():
         if reads_array.shape[0] == 0:
             continue
-        depth, lower_ci, upper_ci = MC_simulation_for_depth(
-            depth_dict[ref],
-            reads_array,
-            depth_percent=depth_percent,
-            n_simulations=n_simulations,
-            pseudocount=pseudocount,
-            batch_size=batch_size
-        )
+        if not skip_error_calculation:
+            depth, lower_ci, upper_ci = MC_simulation_for_depth(
+                depth_dict[ref],
+                reads_array,
+                depth_percent=depth_percent,
+                n_simulations=n_simulations,
+                pseudocount=pseudocount,
+                batch_size=batch_size
+            )
+        else:
+            depth = get_mean_central_depth(depth_dict[ref], depth_percent)
+            lower_ci = depth
+            upper_ci = depth
+
         result_rows.append({
             "sample": sample_name,
             "reference": ref,
@@ -598,8 +606,7 @@ def process_bam_file(
             "lower_ci": lower_ci,
             "upper_ci": upper_ci,
         })
-
-    logging.info(f"Monte Carlo simulation for {sample_name} done.")
+    logging.info(f"Depth calculations for {sample_name} done.")
     return result_rows
 
 def compute_depths_with_error(
@@ -607,6 +614,7 @@ def compute_depths_with_error(
     reference_clusters_csv: Optional[str] = None,
     reference_bins_csv: Optional[str] = None,
     depth_percent: float = 50.0,
+    skip_error_calculation: bool = False,
     n_simulations: int = 100,
     pseudocount: int = 1,
     batch_size: int = 500,
@@ -625,6 +633,8 @@ def compute_depths_with_error(
         CSV defining bins for references. If None, binning is skipped.
     depth_percent : float
         Percentage of middle depth values to include for depth calculation.
+    skip_error_calculation : bool
+        Whether or not to skip error calculation via MC simulation.
     n_simulations : int
         Number of Monte Carlo simulations per reference.
     pseudocount : int
@@ -649,6 +659,7 @@ def compute_depths_with_error(
                 reference_clusters_csv,
                 reference_bins_csv,
                 depth_percent,
+                skip_error_calculation,
                 n_simulations,
                 pseudocount,
                 batch_size
