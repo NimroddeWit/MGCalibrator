@@ -21,7 +21,7 @@ import pysam
 from .parser import calculate_total_base_pairs
 
 
-def _get_raw_depth(depth_list):
+def _get_depth(depth_list):
     depths = np.sort(np.array(depth_list))
     n = len(depths)
     q1_idx = int(0.25 * n)
@@ -610,7 +610,7 @@ def apply_binning_to_dicts(
 
     return reads_dict, depth_dict
 
-def MC_simulation_for_raw_depth(
+def MC_simulation_for_depth(
     depths: np.ndarray,
     reads: np.ndarray,
     n_simulations: int = 1000,
@@ -642,7 +642,7 @@ def MC_simulation_for_raw_depth(
     sim_total_reads = np.random.poisson(n_mapped_reads, n_simulations)
     reads_per_sim = sim_total_reads - n_mapped_reads
 
-    raw_depth_list = []
+    depth_list = []
     n_batches = int(np.ceil(n_simulations / batch_size))
 
     for batch_idx in range(n_batches):
@@ -659,7 +659,7 @@ def MC_simulation_for_raw_depth(
 
             n_reads = abs(n)
             if n_reads == 0:
-                raw_depth_list.append(_get_raw_depth(sim_depths))
+                depth_list.append(_get_depth(sim_depths))
                 continue
 
             if n < 0:
@@ -670,7 +670,7 @@ def MC_simulation_for_raw_depth(
                 remove_lengths = reads[indices_to_remove, 1]
                 for start, length in zip(remove_starts, remove_lengths):
                     sim_depths[start:start+length] -= 1
-                raw_depth_list.append(_get_raw_depth(sim_depths))
+                depth_list.append(_get_depth(sim_depths))
 
             else:
                 # Add reads
@@ -689,13 +689,13 @@ def MC_simulation_for_raw_depth(
                 for pos, length in zip(positions_to_add, lengths_to_add):
                     sim_depths[pos:pos+length] += 1
 
-                raw_depth_list.append(_get_raw_depth(sim_depths))
+                depth_list.append(_get_depth(sim_depths))
 
-    raw_depth = float(np.mean(raw_depth_list))
-    raw_lower_ci = float(np.percentile(raw_depth_list, 2.5))
-    raw_upper_ci = max(raw_depth, float(np.percentile(raw_depth_list, 97.5)))
+    depth = float(np.mean(depth_list))
+    lower_ci = float(np.percentile(depth_list, 2.5))
+    upper_ci = max(depth, float(np.percentile(depth_list, 97.5)))
 
-    return raw_depth, raw_lower_ci, raw_upper_ci
+    return depth, lower_ci, upper_ci
 
 def process_bam_file(
     bam_file: str,
@@ -761,7 +761,7 @@ def process_bam_file(
     for ref, reads_array in reads_dict.items():
         if reads_array.shape[0] == 0:
             continue
-        raw_depth, raw_lower_ci, raw_upper_ci = MC_simulation_for_raw_depth(
+        depth, lower_ci, upper_ci = MC_simulation_for_depth(
             depth_dict[ref],
             reads_array,
             n_simulations=n_simulations,
@@ -771,15 +771,15 @@ def process_bam_file(
         result_rows.append({
             "sample": sample_name,
             "reference": ref,
-            "raw_depth": raw_depth,
-            "raw_lower_ci": raw_lower_ci,
-            "raw_upper_ci": raw_upper_ci,
+            "depth": depth,
+            "lower_ci": lower_ci,
+            "upper_ci": upper_ci,
         })
 
     logging.info(f"Monte Carlo simulation for {sample_name} done.")
     return result_rows
 
-def compute_raw_depths_with_error(
+def compute_depths_with_error(
     bam_files_filtered: List[str],
     reference_clusters_csv: Optional[str] = None,
     reference_bins_csv: Optional[str] = None,

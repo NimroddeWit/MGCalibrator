@@ -18,7 +18,7 @@ import pandas as pd
 from .fileutils import list_bam_files
 from .processor import (
     run_coverm_filter,
-    compute_raw_depths_with_error,
+    compute_depths_with_error,
     calculate_scaling_factors,
 )
 
@@ -227,7 +227,7 @@ def main() -> None:
     # Compute raw depths with uncertainty
     # ----------------------
     logging.info("Computing raw depths with Monte Carlo error estimation...")
-    depths_with_errors = compute_raw_depths_with_error(
+    depths_with_errors = compute_depths_with_error(
         bam_files_filtered,
         reference_clusters_csv=reference_clusters_csv,
         reference_bins_csv=reference_bins_csv,
@@ -259,12 +259,12 @@ def main() -> None:
         depths_with_errors
         .assign(
             # Asymmetric relative errors (before Qubit correction)
-            relative_error_down=lambda df: (df["raw_depth"] - df["raw_lower_ci"]) / df["raw_depth"],
-            relative_error_up=lambda df: (df["raw_upper_ci"] - df["raw_depth"]) / df["raw_depth"],
+            relative_error_down=lambda df: (df["depth"] - df["lower_ci"]) / df["depth"],
+            relative_error_up=lambda df: (df["upper_ci"] - df["depth"]) / df["depth"],
 
             # Raw absolute errors
-            raw_error_down=lambda df: df["raw_depth"] * df["relative_error_down"],
-            raw_error_up=lambda df: df["raw_depth"] * df["relative_error_up"],
+            error_down=lambda df: df["depth"] * df["relative_error_down"],
+            error_up=lambda df: df["depth"] * df["relative_error_up"],
 
             # Combine uncertainty with Qubit measurement error
             total_relative_error_down=lambda df: np.sqrt(df["relative_error_down"]**2 + qubit_error**2),
@@ -272,7 +272,7 @@ def main() -> None:
 
             # Map scaling factors and apply calibration
             scaling_factor=lambda df: df["sample"].map(scaling_factors),
-            calibrated_depth=lambda df: df["raw_depth"] * df["scaling_factor"],
+            calibrated_depth=lambda df: df["depth"] * df["scaling_factor"],
 
             # Propagate errors through calibration
             calibrated_error_down=lambda df: df["calibrated_depth"] * df["total_relative_error_down"],
@@ -284,9 +284,9 @@ def main() -> None:
             [
                 "sample",
                 "reference",
-                "raw_depth",
-                "raw_error_down",
-                "raw_error_up",
+                "depth",
+                "error_down",
+                "error_up",
                 "calibrated_depth",
                 "calibrated_error_down",
                 "calibrated_error_up",
