@@ -86,11 +86,11 @@ def main() -> None:
         help="Optional list of suffixes to filter BAM files.",
     )
     parser.add_argument(
-        "--reference_clusters",
+        "--cluster",
         help="CSV file mapping reference sequences to clusters (e.g., stack multiple alleles into one gene).",
     )
     parser.add_argument(
-        "--reference_bins",
+        "--bin",
         help="CSV file mapping reference sequences to bins (e.g., concatenate contigs from the same MAG).",
     )
     parser.add_argument(
@@ -207,8 +207,8 @@ def main() -> None:
 
     initial_dna_mass = dict(zip(dna_mass_df.sample_id, dna_mass_df.DNA_mass))
 
-    reference_clusters_csv = args.reference_clusters
-    reference_bins_csv = args.reference_bins
+    reference_clusters_csv = args.cluster
+    reference_bins_csv = args.bin
     min_read_perc_identity = args.filter_percent
     depth_percent = args.depth_percent
     qubit_error = args.qubit_error

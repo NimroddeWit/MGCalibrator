@@ -155,7 +155,7 @@ def get_depth_dict_with_samtools(bam_path: str) -> Dict[str, np.ndarray]:
         raise RuntimeError("samtools is not installed or not in PATH.")
 
     # Read samtools output into a DataFrame in one shot
-    df = pd.read_csv(proc.stdout, sep='\t', names=['ref', 'pos', 'depth'], dtype={'ref': str, 'pos': int, 'depth': np.int16})
+    df = pd.read_csv(proc.stdout, sep='\t', names=['ref', 'pos', 'depth'], dtype={'ref': str, 'pos': int, 'depth': np.int32})
 
     proc.stdout.close()
     proc.wait()
@@ -166,7 +166,7 @@ def get_depth_dict_with_samtools(bam_path: str) -> Dict[str, np.ndarray]:
     # Convert DataFrame to dictionary of NumPy arrays, one per reference
     depth_dict: Dict[str, np.ndarray] = {}
     for ref, group in df.groupby('ref'):
-        arr = np.zeros(group['pos'].max(), dtype=np.int16)
+        arr = np.zeros(group['pos'].max(), dtype=np.int32)
         arr[group['pos'].values - 1] = group['depth'].values
         depth_dict[ref] = arr
 
@@ -469,8 +469,8 @@ def MC_simulation_for_depth(
         batch_reads_per_sim = reads_per_sim[start_idx:end_idx]
         batch_size_actual = end_idx - start_idx
 
-        # Create a batch matrix of depths (int16 to save memory)
-        batch_depths = np.tile(depths, (batch_size_actual, 1)).astype(np.int16)
+        # Create a batch matrix of depths 
+        batch_depths = np.tile(depths, (batch_size_actual, 1)).astype(np.int32)
 
         for i, n in enumerate(batch_reads_per_sim):
             sim_depths = batch_depths[i]
