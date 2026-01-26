@@ -200,7 +200,7 @@ def get_reads_dict_from_bam(bam_path: str) -> Dict[str, np.ndarray]:
             # Initialize lists for all references only when needed
             for read in bamfile.fetch(until_eof=True):
                 # Skip unmapped reads
-                if read.is_unmapped:
+                if read.is_unmapped or read.is_secondary or read.is_supplementary:
                     continue
                 
                 ref_id = read.reference_id
