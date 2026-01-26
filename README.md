@@ -20,7 +20,7 @@ MGCalibrator performs the following steps:
 1. **(Optional)** Filters BAM files by minimum read percent identity using [`CoverM`](https://github.com/wwood/CoverM).
 2. **Extracts read depths** per reference sequence from BAM files (`samtools depth`).
 3. **(Optional)** Clusters or bins references according to user-provided CSVs.
-4. **Runs Monte Carlo simulations** to estimate confidence intervals for each reference’s mean depth (M98).
+4. **Runs Monte Carlo simulations** to estimate confidence intervals for each reference’s mean depth.
 5. **Computes sample-specific scaling factors** from input DNA masses and sequenced base pairs.
 6. **Calibrates raw depths** to absolute abundances (number of copies), with confidence intervals.
 
@@ -40,7 +40,7 @@ pip install .
 
 * Python ≥ 3.9
 * [`samtools`](http://www.htslib.org/)
-* [`coverm`](https://github.com/wwood/CoverM) (optional but recommended)
+* [`coverm`](https://github.com/wwood/CoverM)
 * Other dependencies are installed automatically (`pandas`, `numpy`, `pysam`, etc.)
 
 ---
@@ -48,40 +48,43 @@ pip install .
 ## ▶️ Example Usage
 
 ```bash
-MGCalibrator \
-  --bam_folder data/bams/ \
-  --dna_mass data/dna_mass.csv \
-  --scaling_factors data/scaling_factors.txt \
-  --output results/calibrated_abundances.csv \
-  --reference_clusters data/reference_clusters.csv \
-  --reference_bins data/reference_bins.csv \
-  --perc_ident 97 \
-  --threads 8 \
-  --mc_samples 500 \
-  --batch_size 500 \
-  --pseudocount 1.0
+mgcalibrator \
+    --bam_folder data/input/ \
+    --dna_mass data/input/dna_mass.csv \
+    --cluster data/input/reference_clusters.csv \
+    --bin data/input/reference_bins.csv \
+    --output data/output/output.csv \
+    --scaling_factors data/output/scaling_factors.txt \
 ```
 
 ---
 
 ## ⚙️ Command-Line Arguments
 
-| **Argument**           | **Required** | **Description**                                                                    |
-| ---------------------- | ------------ | ---------------------------------------------------------------------------------- |
-| `--bam_folder`         | ✅            | Folder containing input `.bam` files.                                              |
-| `--extensions`         | ❌            | File extensions to search for (default: `.sorted.bam`, `.sort.bam`).               |
-| `--suffixes`           | ❌            | List of suffixes to filter file names.                                             |
-| `--reference_clusters` | ❌            | CSV mapping reference sequences to cluster names.                                  |
-| `--reference_bins`     | ❌            | CSV mapping reference sequences to bins.                                           |
-| `--dna_mass`           | ✅            | CSV file with measured total DNA mass (ng) per sample (`sample_id, DNA_mass`).     |
-| `--scaling_factors`    | ✅            | Path to a text file containing scaling factors (created or updated automatically). |
-| `--output`             | ✅            | Path for the output CSV containing absolute abundances.                            |
-| `--threads`            | ❌            | Number of CPU cores to use (default: all available).                               |
-| `--skip_filtering`     | ❌            | Skip the CoverM filtering step (requires already filtered BAMs).                   |
-| `--perc_ident`         | ❌            | Minimum read percent identity for filtering (default: 97).                         |
-| `--mc_samples`         | ❌            | Number of Monte Carlo samples for confidence intervals (default: 100).             |
-| `--batch_size`         | ❌            | Number of simulations per batch (default: 500).                                    |
-| `--pseudocount`        | ❌            | Pseudocount for read-mapping probability (default: 1.0).                           |
+| **Argument**               | **Required** | **Description**                                                                                                                      |
+|----------------------------|:------------:|--------------------------------------------------------------------------------------------------------------------------------------|
+| `--bam_folder`             | ✅           | Folder containing input `.bam` files.                                                                                                |
+| `--extensions`             | ❌           | File extensions to search for (default: `.sorted.bam`, `.sort.bam`).                                                                |
+| `--suffixes`               | ❌           | Optional list of suffixes to further filter BAM files by filename.                                                                   |
+| `--cluster`                | ❌           | CSV file mapping reference sequences to clusters (e.g., to stack alleles into one gene).                                             |
+| `--bin`                    | ❌           | CSV file mapping reference sequences to bins (e.g., to combine contigs from the same MAG).                                           |
+| `--dna_mass`               | ✅           | CSV file containing measured DNA mass (in ng), with columns: `sample_id` and `DNA_mass`.                                             |
+| `--scaling_factors`        | ✅           | Path to a file storing precomputed scaling factors (if it exists, it will be reused, otherwise created/updated).                     |
+| `--output`                 | ✅           | Path for the output CSV containing absolute abundances (and errors).                                                                 |
+| `--threads`                | ❌           | Number of parallel threads/CPU cores to use (default: all available).                                                                |
+| `--skip_filtering`         | ❌           | Skip filtering based on mapping identity (assumes BAMs are already filtered).                                                        |
+| `--filter_percent`         | ❌           | Minimum read percent identity for filtering (default: `97.0`).                                                                       |
+| `--depth_percent`          | ❌           | Percentage of middle depth values to use for depth calculation (default: `50.0`).                                                    |
+| `--qubit_error`            | ❌           | Qubit measurement error (as relative error, default: `0.0`).                                                                         |
+| `--mc_samples`             | ❌           | Number of Monte Carlo samples for error/confidence interval estimation (default: `100`).                                             |
+| `--batch_size`             | ❌           | Number of simulations per batch for Monte Carlo calculation (default: `500`).                                                        |
+| `--pseudocount`            | ❌           | Pseudocount for read-mapping probability at zero-depth positions (default: `1.0`).                                                   |
+| `--skip_error_calculation` | ❌           | Skip error calculation by Monte Carlo simulation (returns only point estimates).                                                     |
+
+**Note:**
+* The `--qubit_error` option allows you to propagate laboratory measurement error into the uncertainty analysis.
+* Error estimation is performed using Monte Carlo simulations, but can be disabled with `--skip_error_calculation` if you only want point estimates.
+
 
 ---
 
@@ -128,8 +131,8 @@ MGCalibrator \
 
 The main output is a CSV with the following columns:
 
-| Sample | Reference | M98_mean | M98_lower_ci | M98_upper_ci | scaling_factor | calibrated_depth | calibrated_lower_ci | calibrated_upper_ci |
-| ------ | --------- | -------- | ------------ | ------------ | -------------- | ---------------- | ------------------- | ------------------- |
+| sample | reference | depth | error_down | error_up | calibrated_depth | calibrated_error_down | calibrated_error_up |
+| ------ | --------- | ----- | ---------- | -------- | ---------------- | --------------------- | ------------------- |
 
 ---
 
@@ -151,7 +154,7 @@ and stored as NumPy arrays per reference.
 
 ### Step 3. Monte Carlo Simulation
 
-Each reference is resampled (`n_simulations` times) to estimate mean coverage (`M98`) and 95% confidence intervals.
+Each reference is resampled (`n_simulations` times) to estimate mean coverage (`M50`) and 95% confidence intervals.
 
 ### Step 4. Scaling
 
@@ -180,7 +183,6 @@ Final absolute abundances (in number of copies) are derived by multiplying scale
 | ----------------------- | ------------------- |
 | `pandas`, `numpy`       | Data handling       |
 | `pysam`                 | BAM file parsing    |
-| `matplotlib`, `seaborn` | (Optional) plotting |
 | `coverm`, `samtools`    | External tools      |
 
 ---
@@ -200,3 +202,4 @@ Developed by **Nimrod de Wit**
 📍 RIVM, 2025
 
 ---
+
