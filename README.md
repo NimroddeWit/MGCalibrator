@@ -17,8 +17,8 @@ The tool uses per-sample scaling factors and Monte Carlo simulation to estimate 
 
 MGCalibrator performs the following steps:
 
-1. **(Optional)** Filters BAM files by minimum read percent identity using [`CoverM`](https://github.com/wwood/CoverM).
-2. **Extracts read depths** per reference sequence from BAM files (`samtools depth`).
+1. **(Optional)** Filters BAM files by minimum read percent identity.
+2. **Extracts read depths** per reference sequence from BAM files.
 3. **(Optional)** Clusters or bins references according to user-provided CSVs.
 4. **Runs Monte Carlo simulations** to estimate confidence intervals for each reference’s mean depth.
 5. **Computes sample-specific scaling factors** from input DNA masses and sequenced base pairs.
@@ -159,9 +159,10 @@ Each reference is resampled (`n_simulations` times) to estimate mean coverage (`
 ### Step 4. Scaling
 
 Scaling factors are computed as:
-[
-\text{Scaling factor} = \frac{\text{Initial DNA mass}}{\text{Final DNA mass after sequencing}}
-]
+
+<p align="center">
+  <strong>Scaling factor</strong> = <sup>Initial DNA mass</sup> / <sub>Final DNA mass after sequencing</sub>
+</p>
 
 ### Step 5. Calibration
 
