@@ -1,0 +1,27 @@
+{
+    "creators": [
+        {
+            "name": "De Wit, Nimrod",
+            "orcid": "0009-0000-0515-4613",
+            "affiliation": "National Institute for Public Health and the Environment (RIVM)",
+            "type": "ProjectMember"
+        }
+    ],
+    "title": "MGCalibrator",
+    "version": "1.0.0",
+    "access_right": "open",
+    "related_identifiers": [
+        {
+            "identifier": "https://doi.org/10.64898/2026.02.26.708180",
+            "relation": "isSupplementTo",
+            "resource_type": "publication-preprint"
+        }
+    ],
+    "keywords": [
+        "Absolute Quantification", 
+        "Metagenomics", 
+        "Microbiome Abundance"
+    ],
+    "upload_type": "software",
+    "language": "eng",
+}
