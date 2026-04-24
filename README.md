@@ -190,17 +190,10 @@ Final absolute abundances (in number of copies) are derived by multiplying scale
 
 ## 📄 Citation
 
-If you use **MGCalibrator** in your research, please cite:
+If you use **MGCalibrator** in your research, please cite our preprint:
 
-> de Wit, N. et al. (2026). [insert publication title here...]
-> GitHub: [https://github.com/NimroddeWit/MGCalibrator](https://github.com/NimroddeWit/MGCalibrator)
-
----
-
-## 🙌 Acknowledgements
-
-Developed by **Nimrod de Wit**
-📍 RIVM, 2025
+> de Wit, N. et al., 2026. Calibrating for absolute microbiome abundances without spike-ins. BioRxiv. https://doi.org/10.64898/2026.02.26.708180
 
 ---
+
 
