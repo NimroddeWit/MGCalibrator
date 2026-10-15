@@ -2,7 +2,7 @@
 processor.py
 
 Functions for processing BAM files, computing depths, clustering, binning,
-and Monte Carlo simulations.
+Monte Carlo simulations, and calculating scaling factors (from BAM or FASTQ files).
 """
 
 # Standard library imports
@@ -18,7 +18,7 @@ import pandas as pd
 import pysam
 
 # Local package imports
-from .parser import calculate_total_base_pairs
+from .parser import calculate_total_base_pairs, calculate_total_base_pairs_fastq
 
 
 def get_mean_central_depth(depth_values, keep_percent):
@@ -672,22 +672,37 @@ def compute_depths_with_error(
 
     return pd.DataFrame(result_rows)
 
-def calculate_scaling_factors(samples, bam_files, initial_dna_mass, scaling_factors_file, n_workers=None):
+def calculate_scaling_factors(
+    samples,
+    bam_files,
+    initial_dna_mass,
+    scaling_factors_file,
+    n_workers=None,
+    fastq_files_by_sample=None,
+):
     """
-    Calculate scaling factors for each sample based on BAM files and initial DNA mass.
+    Calculate scaling factors for each sample based on the sequenced bases and the
+    initial DNA mass. The sequenced bases are counted either in BAM files or in
+    the raw FASTQ files (exactly one of the two must be provided).
     If a scaling factors file exists, it is loaded. Otherwise, scaling factors are computed
     and saved to the file.
 
     Args:
         samples (iterable): Sample names to calculate scaling factors for.
-        bam_files (list[str]): Paths to BAM files.
+        bam_files (list[str] or None): Paths to BAM files (BAM mode).
         initial_dna_mass (dict): Initial DNA mass per sample.
         scaling_factors_file (str): Path to file to read/write scaling factors.
         n_workers (int, optional): Number of parallel workers for base pair calculation.
+        fastq_files_by_sample (dict[str, list[str]], optional): FASTQ file paths per
+            sample (SingleM mode; 1 file for Nanopore reads, 2 files for paired-end
+            Illumina reads).
 
     Returns:
         dict: Scaling factors keyed by sample name.
     """
+    if bool(bam_files) == bool(fastq_files_by_sample):
+        raise ValueError("Provide either BAM files or FASTQ files to calculate scaling factors, not both.")
+
     scaling_factors = {}
 
     # Load existing scaling factors if file exists
@@ -705,15 +720,29 @@ def calculate_scaling_factors(samples, bam_files, initial_dna_mass, scaling_fact
     if missing_samples:
         logging.info("Calculating missing scaling factors...")
 
-        # Calculate final DNA mass from BAM files
-        sample_base_pairs = calculate_total_base_pairs(bam_files=bam_files, n_workers=n_workers)
+        if fastq_files_by_sample:
+            # SingleM mode: count bases in the raw FASTQ files (only for missing samples)
+            samples_without_fastq = sorted(s for s in missing_samples if not fastq_files_by_sample.get(s))
+            if samples_without_fastq:
+                raise ValueError(f"No FASTQ files found for sample(s): {', '.join(samples_without_fastq)}")
+            sample_base_pairs = calculate_total_base_pairs_fastq(
+                fastq_files_by_sample={s: fastq_files_by_sample[s] for s in missing_samples},
+                n_workers=n_workers,
+            )
+            source = "FASTQ file(s)"
+        else:
+            # BAM mode: count bases in the BAM files
+            sample_base_pairs = calculate_total_base_pairs(bam_files=bam_files, n_workers=n_workers)
+            source = "BAM files"
+
+        # Calculate final DNA mass from the counted bases
         final_dna_mass = {sample: sample_base_pairs.get(sample, 0) * 1.079e-12  # Convert to ng
                           for sample in missing_samples}
 
-        # Check for samples with no BAM data
+        # Check for samples without any sequenced bases
         for sample, mass in final_dna_mass.items():
             if mass == 0:
-                raise ValueError(f"No base pairs found for sample '{sample}' in BAM files.")
+                raise ValueError(f"No base pairs found for sample '{sample}' in {source}.")
 
         # Compute scaling factors for missing samples
         for sample in missing_samples:
@@ -722,6 +751,9 @@ def calculate_scaling_factors(samples, bam_files, initial_dna_mass, scaling_fact
         logging.info("Scaling factors calculated. Saving to file...")
 
         # Save/update scaling factors file
+        scaling_dir = os.path.dirname(scaling_factors_file)
+        if scaling_dir:
+            os.makedirs(scaling_dir, exist_ok=True)
         with open(scaling_factors_file, "w") as f:
             for sample, factor in scaling_factors.items():
                 f.write(f"{sample}: {factor}\n")

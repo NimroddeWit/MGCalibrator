@@ -1,0 +1,4 @@
+sample	full_coverage	error_down	error_up	taxonomy
+test_2_input	3.0	0.30000000000000004	0.30000000000000004	Root; d__Bacteria
+test_2_input	1.5	0.15000000000000002	0.15000000000000002	Root; d__Bacteria; p__Bacillota
+test_2_input	1.5	0.15000000000000002	0.15000000000000002	Root; d__Archaea

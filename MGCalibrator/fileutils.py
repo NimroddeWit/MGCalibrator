@@ -1,6 +1,6 @@
 import os
 from glob import glob
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 
 def list_bam_files(
@@ -72,3 +72,103 @@ def list_bam_files(
         files = filtered_files
 
     return files
+
+
+# ----------------------------------------------------------------------
+# FASTQ / SingleM input discovery
+# ----------------------------------------------------------------------
+DEFAULT_FASTQ_EXTENSIONS = [".fastq.gz", ".fq.gz", ".fastq", ".fq"]
+DEFAULT_SINGLEM_EXTENSIONS = [".tsv", ".tsv.gz"]
+
+
+def get_sample_name(path_or_name: str) -> str:
+    """
+    Derive the MGCalibrator sample name from a file name or a SingleM sample name.
+
+    The sample name consists of the first two underscore-separated parts of the
+    base name, ignoring everything after the first dot. For example,
+    'sample_1_input_R1.fastq.gz' -> 'sample_1'.
+
+    Parameters
+    ----------
+    path_or_name : str
+        File path, file name or sample name.
+
+    Returns
+    -------
+    str
+        The derived sample name.
+    """
+    base_name = os.path.basename(path_or_name)
+    name_without_ext = base_name.split(".")[0]
+    return "_".join(name_without_ext.split("_")[0:2])
+
+
+def list_files_by_extension(
+    folder: str,
+    extensions: List[str],
+    suffixes: Optional[List[str]] = None,
+) -> List[str]:
+    """
+    List files in a folder (non-recursive) that end with one of the given extensions.
+
+    Parameters
+    ----------
+    folder : str
+        Directory to search.
+    extensions : list of str
+        File extensions to include (e.g. ['.fastq.gz', '.fq.gz']).
+    suffixes : list of str, optional
+        If provided, only files whose name ends with one of these suffixes
+        (after removing the extension) are returned, e.g. ['_1', '_2'] to
+        skip singleton files.
+
+    Returns
+    -------
+    list of str
+        Sorted list of matching file paths.
+    """
+    if not os.path.isdir(folder):
+        raise NotADirectoryError(f"Folder does not exist: {folder}")
+
+    # Remove the longest matching extension first (e.g. '.fastq.gz' before '.gz')
+    sorted_exts = sorted(extensions, key=len, reverse=True)
+
+    files = []
+    for name in sorted(os.listdir(folder)):
+        path = os.path.join(folder, name)
+        if not os.path.isfile(path):
+            continue
+
+        matching_ext = next((ext for ext in sorted_exts if name.endswith(ext)), None)
+        if matching_ext is None:
+            continue
+
+        if suffixes:
+            base_name = name[: -len(matching_ext)]
+            if not any(base_name.endswith(suffix) for suffix in suffixes):
+                continue
+
+        files.append(path)
+
+    return files
+
+
+def group_files_by_sample(files: List[str]) -> Dict[str, List[str]]:
+    """
+    Group file paths by the sample name derived from their file names.
+
+    Parameters
+    ----------
+    files : list of str
+        File paths (e.g. FASTQ files).
+
+    Returns
+    -------
+    dict
+        Mapping of sample name -> sorted list of file paths.
+    """
+    grouped: Dict[str, List[str]] = {}
+    for path in files:
+        grouped.setdefault(get_sample_name(path), []).append(path)
+    return {sample: sorted(paths) for sample, paths in grouped.items()}
