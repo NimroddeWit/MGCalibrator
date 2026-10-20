@@ -38,3 +38,8 @@ MGCalibrator/__pycache__/*
 data/output/output.csv
 data/output/scaling_factors.txt
 data/output/test*
+
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/

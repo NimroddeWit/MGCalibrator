@@ -1,0 +1,2 @@
+Sample_file	Genome_file	Taxonomic_abundance	Sequence_abundance	Adjusted_ANI	Eff_cov	ANI_5-95_percentile	Eff_lambda	Lambda_5-95_percentile	Median_cov	Mean_cov_geq1	Containment_ind	Naive_ANI	kmers_reassigned	Contig_name
+test_1_input_1.fastq.gz	imgvr_viruses.fna.gz	100.0000	100.0000	97.80	0.150	96.90-98.50	0.150	0.08-0.27	1	1.200	900/4000	97.80	0	IMGVR_UViG_2503982007_000001|2503982007|000001 Caudoviricetes phage

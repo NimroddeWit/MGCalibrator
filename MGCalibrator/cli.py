@@ -2,16 +2,19 @@
 MGCalibrator Command-Line Interface (CLI)
 
 This module provides the command-line interface for MGCalibrator, a tool for
-calculating absolute microbial abundances. It supports two (mutually exclusive)
+calculating absolute microbial abundances. It supports three (mutually exclusive)
 input modes:
 
   * BAM mode: BAM files as input. Handles file discovery, filtering, depth
     computation, Monte Carlo error estimation, and calibration.
   * SingleM mode: SingleM output files + the raw FASTQ files as input. The
-    SingleM coverage values are used as depths, so no filtering or Monte Carlo
-    simulation is needed.
+    SingleM species-level coverage values are used as depths, so no filtering
+    or Monte Carlo simulation is needed.
+  * Sylph mode: Sylph results (.sylphmpa files, optionally with the Sylph profile
+    TSV files for confidence intervals) + the raw FASTQ files as input. The
+    strain-level Sylph coverage values are used as depths.
 
-Both modes produce an output file with the same columns.
+All modes produce an output file with the same columns.
 """
 
 import argparse
@@ -22,9 +25,13 @@ import subprocess
 import numpy as np
 import pandas as pd
 
+from . import __version__
 from .fileutils import (
     DEFAULT_FASTQ_EXTENSIONS,
     DEFAULT_SINGLEM_EXTENSIONS,
+    DEFAULT_SYLPH_EXTENSIONS,
+    DEFAULT_SYLPH_PROFILE_EXTENSIONS,
+    collect_files,
     group_files_by_sample,
     list_bam_files,
     list_files_by_extension,
@@ -34,11 +41,13 @@ from .processor import (
     compute_depths_with_error,
     calculate_scaling_factors,
 )
-from .singlem import (
-    build_sample_map,
-    read_sample_map,
-    read_singlem_tables,
-    singlem_to_depth_table,
+from .samples import build_sample_map, read_sample_map
+from .singlem import read_singlem_tables, singlem_to_depth_table
+from .sylph import (
+    add_confidence_intervals,
+    read_sylph_profiles,
+    read_sylphmpa_files,
+    sylph_to_depth_table,
 )
 
 # ----------------------------------------------------------------------
@@ -76,9 +85,11 @@ def main() -> None:
     formatter_class=argparse.RawTextHelpFormatter,
     description=(
         "MGCalibrator — Calculate absolute microbial abundances from metagenomic data.\n\n"
-        "Two input modes are supported (use one of them, not both):\n"
+        "Three input modes are supported (use exactly one of them):\n"
         "  1. BAM mode:      --bam_folder\n"
-        "  2. SingleM mode:  --singlem_folder together with --fastq_folder\n\n"
+        "  2. SingleM mode:  --singlem_folder together with --fastq_folder\n"
+        "  3. Sylph mode:    --sylph_folder together with --fastq_folder\n"
+        "                    (optionally --sylph_profile_folder for confidence intervals)\n\n"
         "Example usage (BAM mode):\n"
         "  mgcalibrator \\\n"
         "    --bam_folder data/bams \\\n"
@@ -92,11 +103,19 @@ def main() -> None:
         "    --fastq_folder data/fastq \\\n"
         "    --dna_mass data/dna_mass.csv \\\n"
         "    --scaling_factors results/scaling_factors.txt \\\n"
-        "    --output results/calibrated_depths.csv \\\n"
-        "    --threads 8"
+        "    --output results/calibrated_depths.csv\n\n"
+        "Example usage (Sylph mode, two databases, with confidence intervals):\n"
+        "  mgcalibrator \\\n"
+        "    --sylph_folder results/sylph_gtdb results/sylph_virus \\\n"
+        "    --sylph_profile_folder results/sylph_gtdb_profiles results/sylph_virus_profiles \\\n"
+        "    --fastq_folder data/fastq \\\n"
+        "    --dna_mass data/dna_mass.csv \\\n"
+        "    --scaling_factors results/scaling_factors.txt \\\n"
+        "    --output results/calibrated_depths.csv"
         ),
     )
-    
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+
     # --- Input/output options ---
     parser.add_argument(
         "--bam_folder",
@@ -105,16 +124,38 @@ def main() -> None:
     parser.add_argument(
         "--singlem_folder",
         help=(
-            "SingleM mode: folder containing the SingleM output files (TSV with the columns\n"
-            "sample, full_coverage and taxonomy). Requires --fastq_folder."
+            "SingleM mode: folder containing the SingleM output files (standard SingleM taxonomic\n"
+            "profile: TSV with the columns sample, coverage and taxonomy; only species-level rows\n"
+            "are used). Requires --fastq_folder."
+        ),
+    )
+    parser.add_argument(
+        "--sylph_folder",
+        nargs="+",
+        help=(
+            "Sylph mode: one or more folders (or files) with .sylphmpa files, as written by\n"
+            "`sylph-tax taxprof` (one file per sample). Results of separate Sylph runs, e.g. with\n"
+            "different databases, can be given together; files of the same sample are combined\n"
+            "using the sample name in the file header. Only strain-level rows are used.\n"
+            "Requires --fastq_folder."
+        ),
+    )
+    parser.add_argument(
+        "--sylph_profile_folder",
+        nargs="+",
+        help=(
+            "Sylph mode (optional): one or more folders (or files) with the `sylph profile` output\n"
+            "TSV files that the .sylphmpa files were made from (single- or multi-sample TSVs).\n"
+            "Used to add the Sylph confidence intervals (5th-95th percentile of Eff_lambda) as\n"
+            "error_down and error_up."
         ),
     )
     parser.add_argument(
         "--fastq_folder",
         help=(
-            "SingleM mode: folder containing the raw FASTQ files (optionally gzip-compressed),\n"
+            "SingleM/Sylph mode: folder containing the raw FASTQ files (optionally gzip-compressed),\n"
             "1 file per sample for Nanopore reads or 2 files per sample for paired-end\n"
-            "Illumina reads. Requires --singlem_folder."
+            "Illumina reads. Requires --singlem_folder or --sylph_folder."
         ),
     )
     parser.add_argument(
@@ -136,10 +177,22 @@ def main() -> None:
         help="SingleM mode: SingleM output file extensions to search for (default: .tsv .tsv.gz).",
     )
     parser.add_argument(
+        "--sylphmpa_extensions",
+        nargs="*",
+        default=DEFAULT_SYLPH_EXTENSIONS,
+        help="Sylph mode: .sylphmpa file extensions to search for in folders (default: .sylphmpa .sylphmpa.gz).",
+    )
+    parser.add_argument(
+        "--sylph_profile_extensions",
+        nargs="*",
+        default=DEFAULT_SYLPH_PROFILE_EXTENSIONS,
+        help="Sylph mode: Sylph profile file extensions to search for in folders (default: .tsv .tsv.gz).",
+    )
+    parser.add_argument(
         "--suffixes",
         nargs="*",
         help=(
-            "Optional list of suffixes to filter BAM files (BAM mode) or FASTQ files (SingleM mode),\n"
+            "Optional list of suffixes to filter BAM files (BAM mode) or FASTQ files (SingleM/Sylph mode),\n"
             "matched at the end of the file name before the extension (e.g. '_1 _2' to skip\n"
             "singleton FASTQ files)."
         ),
@@ -147,9 +200,9 @@ def main() -> None:
     parser.add_argument(
         "--sample_map",
         help=(
-            "SingleM mode: optional CSV file linking SingleM sample names to sample names derived\n"
-            "from the FASTQ files, with the columns 'singlem_sample' and 'sample_id'. Only needed\n"
-            "when the names cannot be matched automatically."
+            "SingleM/Sylph mode: optional CSV file linking sample names in the SingleM/Sylph output to\n"
+            "sample names derived from the FASTQ files, with the columns 'singlem_sample' (or\n"
+            "'sylph_sample') and 'sample_id'. Only needed when the names cannot be matched automatically."
         ),
     )
     parser.add_argument(
@@ -242,20 +295,32 @@ def main() -> None:
     # Determine input mode
     # ----------------------
     bam_mode = args.bam_folder is not None
-    singlem_mode = args.singlem_folder is not None or args.fastq_folder is not None
+    singlem_mode = args.singlem_folder is not None
+    sylph_mode = args.sylph_folder is not None
+    fastq_mode = singlem_mode or sylph_mode
 
-    if bam_mode and singlem_mode:
+    selected_modes = [name for name, active in
+                      (("--bam_folder", bam_mode), ("--singlem_folder", singlem_mode), ("--sylph_folder", sylph_mode))
+                      if active]
+    if len(selected_modes) > 1:
         parser.error(
-            "Provide either a BAM folder (--bam_folder) or SingleM output + FASTQ files "
-            "(--singlem_folder and --fastq_folder), not both."
+            f"Provide input for only one mode, but got {' and '.join(selected_modes)}. Use either a BAM "
+            "folder (--bam_folder), SingleM output (--singlem_folder) or Sylph output (--sylph_folder), "
+            "with --fastq_folder for the latter two."
         )
-    if not bam_mode and not singlem_mode:
+    if not selected_modes:
         parser.error(
-            "No input provided. Use --bam_folder (BAM mode) or --singlem_folder together "
-            "with --fastq_folder (SingleM mode)."
+            "No input provided. Use --bam_folder (BAM mode), --singlem_folder with --fastq_folder "
+            "(SingleM mode) or --sylph_folder with --fastq_folder (Sylph mode)."
         )
-    if singlem_mode and (args.singlem_folder is None or args.fastq_folder is None):
-        parser.error("SingleM mode requires both --singlem_folder and --fastq_folder.")
+    if fastq_mode and args.fastq_folder is None:
+        parser.error(f"{selected_modes[0]} requires --fastq_folder.")
+    if bam_mode and args.fastq_folder is not None:
+        parser.error("--fastq_folder can only be used together with --singlem_folder or --sylph_folder.")
+    if args.sylph_profile_folder is not None and not sylph_mode:
+        parser.error("--sylph_profile_folder can only be used together with --sylph_folder.")
+
+    mode_name = "BAM" if bam_mode else ("SingleM + FASTQ" if singlem_mode else "Sylph + FASTQ")
 
     # ----------------------
     # Logging configuration
@@ -268,24 +333,33 @@ def main() -> None:
 
     print_startup_message()
     logging.info("Starting MGCalibrator...")
-    logging.info(f"Input mode: {'BAM' if bam_mode else 'SingleM + FASTQ'}.")
+    logging.info(f"Input mode: {mode_name}.")
     logging.info(f"Using up to {args.threads or 'all available'} threads.")
 
     # Warn about options that have no effect in the selected mode
+    calculation_options = [
+        "extensions", "cluster", "bin", "skip_filtering", "filter_percent", "depth_percent",
+        "mc_samples", "batch_size", "pseudocount", "skip_error_calculation",
+    ]
     if bam_mode:
-        mode_specific_options = ["fastq_extensions", "singlem_extensions", "sample_map"]
-    else:
         mode_specific_options = [
-            "extensions", "cluster", "bin", "skip_filtering", "filter_percent", "depth_percent",
-            "qubit_error", "mc_samples", "batch_size", "pseudocount", "skip_error_calculation",
+            "fastq_extensions", "singlem_extensions", "sylphmpa_extensions",
+            "sylph_profile_extensions", "sample_map",
         ]
+    elif singlem_mode:
+        # SingleM provides no confidence intervals, so the Qubit error cannot be propagated
+        mode_specific_options = calculation_options + ["qubit_error", "sylphmpa_extensions", "sylph_profile_extensions"]
+    else:
+        mode_specific_options = calculation_options + ["singlem_extensions"]
+        if args.sylph_profile_folder is None:
+            mode_specific_options.append("qubit_error")
     ignored_options = [
         f"--{name}" for name in mode_specific_options
         if getattr(args, name) != parser.get_default(name)
     ]
     if ignored_options:
         logging.warning(
-            f"Ignoring option(s) that are not used in {'BAM' if bam_mode else 'SingleM'} mode: "
+            f"Ignoring option(s) that are not used in {mode_name} mode: "
             f"{', '.join(ignored_options)}"
         )
 
@@ -376,7 +450,7 @@ def main() -> None:
 
     else:
         # ==============================================================
-        # SingleM mode
+        # SingleM / Sylph mode (profiler output + raw FASTQ files)
         # ==============================================================
         # ----------------------
         # Discover FASTQ files and group them per sample
@@ -402,42 +476,72 @@ def main() -> None:
                     "select the right files if this is not intended."
                 )
 
-        # ----------------------
-        # Discover and read SingleM output files
-        # ----------------------
-        singlem_files = list_files_by_extension(
-            folder=args.singlem_folder,
-            extensions=args.singlem_extensions,
-        )
-        if not singlem_files:
-            raise FileNotFoundError(
-                f"No SingleM output files found in {args.singlem_folder} with the specified extensions."
-            )
-        logging.info(f"Found {len(singlem_files)} SingleM output files.")
-        singlem_df = read_singlem_tables(singlem_files)
-
-        # ----------------------
-        # Match SingleM sample names to FASTQ sample names
-        # ----------------------
         manual_map = read_sample_map(args.sample_map) if args.sample_map else {}
-        sample_map = build_sample_map(
-            singlem_samples=singlem_df["sample"].unique(),
-            fastq_samples=fastq_files_by_sample.keys(),
-            manual_map=manual_map,
-        )
 
-        # SingleM full_coverage -> depth, taxonomy -> reference. SingleM provides no
-        # confidence interval here, so the error columns are left as NaN (written as NA).
-        calculated_depths = singlem_to_depth_table(singlem_df, sample_map).assign(
-            lower_ci=np.nan,
-            upper_ci=np.nan,
-        )
+        if singlem_mode:
+            # ----------------------
+            # Read SingleM output (species level)
+            # ----------------------
+            singlem_files = list_files_by_extension(
+                folder=args.singlem_folder,
+                extensions=args.singlem_extensions,
+            )
+            if not singlem_files:
+                raise FileNotFoundError(
+                    f"No SingleM output files found in {args.singlem_folder} with the specified extensions."
+                )
+            logging.info(f"Found {len(singlem_files)} SingleM output files.")
+            singlem_df = read_singlem_tables(singlem_files)
+
+            sample_map = build_sample_map(
+                profiler_samples=singlem_df["sample"].unique(),
+                fastq_samples=fastq_files_by_sample.keys(),
+                manual_map=manual_map,
+                source="SingleM",
+            )
+
+            # SingleM coverage -> depth, taxonomy -> reference. SingleM provides no
+            # confidence interval, so the error columns are left as NaN (written as NA).
+            calculated_depths = singlem_to_depth_table(singlem_df, sample_map).assign(
+                lower_ci=np.nan,
+                upper_ci=np.nan,
+            )
+
+        else:
+            # ----------------------
+            # Read Sylph results (strain level)
+            # ----------------------
+            sylphmpa_files = collect_files(args.sylph_folder, args.sylphmpa_extensions)
+            if not sylphmpa_files:
+                raise FileNotFoundError(
+                    f"No .sylphmpa files found in {' '.join(args.sylph_folder)} with the specified extensions."
+                )
+            logging.info(f"Found {len(sylphmpa_files)} .sylphmpa files.")
+            strains = read_sylphmpa_files(sylphmpa_files)
+
+            if args.sylph_profile_folder is not None:
+                profile_files = collect_files(args.sylph_profile_folder, args.sylph_profile_extensions)
+                if not profile_files:
+                    raise FileNotFoundError(
+                        "No Sylph profile files found in "
+                        f"{' '.join(args.sylph_profile_folder)} with the specified extensions."
+                    )
+                logging.info(f"Found {len(profile_files)} Sylph profile files.")
+                strains = add_confidence_intervals(strains, read_sylph_profiles(profile_files))
+
+            sample_map = build_sample_map(
+                profiler_samples=strains["sample"].unique(),
+                fastq_samples=fastq_files_by_sample.keys(),
+                manual_map=manual_map,
+                source="Sylph",
+            )
+            calculated_depths = sylph_to_depth_table(strains, sample_map)
 
         samples = set(calculated_depths["sample"])
         unused_fastq_samples = sorted(set(fastq_files_by_sample) - samples)
         if unused_fastq_samples:
             logging.warning(
-                "No SingleM results found for FASTQ sample(s): "
+                f"No {'SingleM' if singlem_mode else 'Sylph'} results found for FASTQ sample(s): "
                 f"{', '.join(unused_fastq_samples)}. They are not included in the output."
             )
 
@@ -512,8 +616,8 @@ def main() -> None:
     # ----------------------
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
-    # In SingleM mode the error columns are empty; write them as NA.
-    calibrated_depths.to_csv(args.output, index=False, na_rep="NA" if singlem_mode else "")
+    # In SingleM/Sylph mode, missing errors (no confidence interval available) are written as NA.
+    calibrated_depths.to_csv(args.output, index=False, na_rep="NA" if fastq_mode else "")
     logging.info(f"Results saved to: {args.output}")
 
     # ----------------------

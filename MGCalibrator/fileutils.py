@@ -172,3 +172,39 @@ def group_files_by_sample(files: List[str]) -> Dict[str, List[str]]:
     for path in files:
         grouped.setdefault(get_sample_name(path), []).append(path)
     return {sample: sorted(paths) for sample, paths in grouped.items()}
+
+DEFAULT_SYLPH_EXTENSIONS = [".sylphmpa", ".sylphmpa.gz"]
+DEFAULT_SYLPH_PROFILE_EXTENSIONS = [".tsv", ".tsv.gz"]
+
+
+def collect_files(paths: List[str], extensions: List[str]) -> List[str]:
+    """
+    Collect files from a list of folders and/or individual files.
+
+    Folders are searched (non-recursively) for files with one of the given
+    extensions. Individual files are always included, whatever their extension.
+    Duplicates are removed while keeping the order.
+
+    Parameters
+    ----------
+    paths : list of str
+        Folders and/or file paths.
+    extensions : list of str
+        File extensions to search for inside folders.
+
+    Returns
+    -------
+    list of str
+        File paths.
+    """
+    files: List[str] = []
+    for path in paths:
+        if os.path.isdir(path):
+            files.extend(list_files_by_extension(path, extensions))
+        elif os.path.isfile(path):
+            files.append(path)
+        else:
+            raise FileNotFoundError(f"Path does not exist: {path}")
+
+    seen = set()
+    return [f for f in files if not (f in seen or seen.add(f))]

@@ -1,4 +1,6 @@
-sample	full_coverage	error_down	error_up	taxonomy
-test_1_input_1	12.5	1.25	1.25	Root; d__Bacteria
-test_1_input_1	7.25	0.7250000000000001	0.7250000000000001	Root; d__Bacteria; p__Bacillota
-test_1_input_1	5.25	0.525	0.525	Root; d__Bacteria; p__Pseudomonadota
+sample	coverage	taxonomy
+test_1_input_1	0.2	Root; d__Bacteria
+test_1_input_1	0.8	Root; d__Bacteria; p__Bacillota; c__Bacilli; o__Bacillales; f__Bacillaceae; g__Bacillus
+test_1_input_1	12.5	Root; d__Bacteria; p__Pseudomonadota; c__Gammaproteobacteria; o__Enterobacterales; f__Enterobacteriaceae; g__Escherichia; s__Escherichia coli
+test_1_input_1	7.25	Root; d__Bacteria; p__Bacillota; c__Bacilli; o__Bacillales; f__Bacillaceae; g__Bacillus; s__Bacillus subtilis
+test_1_input_1	5.25	Root; d__Bacteria; p__Pseudomonadota; c__Gammaproteobacteria; o__Pseudomonadales; f__Pseudomonadaceae; g__Pseudomonas; s__Pseudomonas aeruginosa

@@ -1,0 +1,12 @@
+#SampleID	test_1_input_1.fastq.gz	Taxonomies_used:['virus_custom.tsv']
+clade_name	relative_abundance	sequence_abundance	ANI (if strain-level)	Coverage (if strain-level)
+r__Duplodnaviria	100.0	100.0	NA	NA
+r__Duplodnaviria|k__Heunggongvirae	100.0	100.0	NA	NA
+r__Duplodnaviria|k__Heunggongvirae|p__Uroviricota	100.0	100.0	NA	NA
+r__Duplodnaviria|k__Heunggongvirae|p__Uroviricota|c__Caudoviricetes	100.0	100.0	NA	NA
+r__Duplodnaviria|k__Heunggongvirae|p__Uroviricota|c__Caudoviricetes|UNKNOWN	100.0	100.0	NA	NA
+r__Duplodnaviria|k__Heunggongvirae|p__Uroviricota|c__Caudoviricetes|UNKNOWN|UNKNOWN	100.0	100.0	NA	NA
+r__Duplodnaviria|k__Heunggongvirae|p__Uroviricota|c__Caudoviricetes|UNKNOWN|UNKNOWN|UNKNOWN	100.0	100.0	NA	NA
+r__Duplodnaviria|k__Heunggongvirae|p__Uroviricota|c__Caudoviricetes|UNKNOWN|UNKNOWN|UNKNOWN|UNKNOWN	100.0	100.0	NA	NA
+r__Duplodnaviria|k__Heunggongvirae|p__Uroviricota|c__Caudoviricetes|UNKNOWN|UNKNOWN|UNKNOWN|UNKNOWN|UNKNOWN	100.0	100.0	NA	NA
+r__Duplodnaviria|k__Heunggongvirae|p__Uroviricota|c__Caudoviricetes|UNKNOWN|UNKNOWN|UNKNOWN|UNKNOWN|UNKNOWN|t__IMGVR_UViG_2503982007_000001	100.0	100.0	97.8	0.15

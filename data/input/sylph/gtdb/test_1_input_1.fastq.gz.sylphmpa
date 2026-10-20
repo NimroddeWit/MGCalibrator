@@ -1,0 +1,17 @@
+#SampleID	test_1_input_1.fastq.gz	Taxonomies_used:['gtdb_custom.tsv']
+clade_name	relative_abundance	sequence_abundance	ANI (if strain-level)	Coverage (if strain-level)
+d__Bacteria	100.0	100.0	NA	NA
+d__Bacteria|p__Pseudomonadota	61.2	58.0	NA	NA
+d__Bacteria|p__Bacillota	38.8	42.0	NA	NA
+d__Bacteria|p__Pseudomonadota|c__Gammaproteobacteria	61.2	58.0	NA	NA
+d__Bacteria|p__Bacillota|c__Bacilli	38.8	42.0	NA	NA
+d__Bacteria|p__Pseudomonadota|c__Gammaproteobacteria|o__Enterobacterales	61.2	58.0	NA	NA
+d__Bacteria|p__Bacillota|c__Bacilli|o__Bacillales	38.8	42.0	NA	NA
+d__Bacteria|p__Pseudomonadota|c__Gammaproteobacteria|o__Enterobacterales|f__Enterobacteriaceae	61.2	58.0	NA	NA
+d__Bacteria|p__Bacillota|c__Bacilli|o__Bacillales|f__Bacillaceae	38.8	42.0	NA	NA
+d__Bacteria|p__Pseudomonadota|c__Gammaproteobacteria|o__Enterobacterales|f__Enterobacteriaceae|g__Escherichia	61.2	58.0	NA	NA
+d__Bacteria|p__Bacillota|c__Bacilli|o__Bacillales|f__Bacillaceae|g__Bacillus	38.8	42.0	NA	NA
+d__Bacteria|p__Pseudomonadota|c__Gammaproteobacteria|o__Enterobacterales|f__Enterobacteriaceae|g__Escherichia|s__Escherichia coli	61.2	58.0	NA	NA
+d__Bacteria|p__Bacillota|c__Bacilli|o__Bacillales|f__Bacillaceae|g__Bacillus|s__Bacillus subtilis	38.8	42.0	NA	NA
+d__Bacteria|p__Pseudomonadota|c__Gammaproteobacteria|o__Enterobacterales|f__Enterobacteriaceae|g__Escherichia|s__Escherichia coli|t__GCF_000005845.2	61.2	58.0	98.91	0.412
+d__Bacteria|p__Bacillota|c__Bacilli|o__Bacillales|f__Bacillaceae|g__Bacillus|s__Bacillus subtilis|t__GCF_000009045.1	38.8	42.0	99.4	12.35
