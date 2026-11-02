@@ -32,16 +32,23 @@ from .fileutils import (
     DEFAULT_SYLPH_EXTENSIONS,
     DEFAULT_SYLPH_PROFILE_EXTENSIONS,
     collect_files,
-    group_files_by_sample,
     list_bam_files,
     list_files_by_extension,
 )
 from .processor import (
+    filtered_bam_path,
     run_coverm_filter,
     compute_depths_with_error,
     calculate_scaling_factors,
 )
-from .samples import build_sample_map, read_sample_map
+from .samples import (
+    assign_files_to_samples,
+    build_sample_map,
+    check_sample_ids,
+    group_by_sample,
+    read_sample_map,
+    unmatched_files_message,
+)
 from .singlem import read_singlem_tables, singlem_to_depth_table
 from .sylph import (
     add_confidence_intervals,
@@ -200,9 +207,10 @@ def main() -> None:
     parser.add_argument(
         "--sample_map",
         help=(
-            "SingleM/Sylph mode: optional CSV file linking sample names in the SingleM/Sylph output to\n"
-            "sample names derived from the FASTQ files, with the columns 'singlem_sample' (or\n"
-            "'sylph_sample') and 'sample_id'. Only needed when the names cannot be matched automatically."
+            "Optional CSV file that links input names to the sample_id of the DNA mass file, with the\n"
+            "columns 'name' (or 'singlem_sample' / 'sylph_sample') and 'sample_id'. A name can be a\n"
+            "BAM/FASTQ file name or a sample name in the SingleM/Sylph output. Only needed for names\n"
+            "that do not start with their sample_id (followed by '_', '.' or '-')."
         ),
     )
     parser.add_argument(
@@ -344,7 +352,7 @@ def main() -> None:
     if bam_mode:
         mode_specific_options = [
             "fastq_extensions", "singlem_extensions", "sylphmpa_extensions",
-            "sylph_profile_extensions", "sample_map",
+            "sylph_profile_extensions",
         ]
     elif singlem_mode:
         # SingleM provides no confidence intervals, so the Qubit error cannot be propagated
@@ -370,7 +378,11 @@ def main() -> None:
     if "sample_id" not in dna_mass_df.columns or "DNA_mass" not in dna_mass_df.columns:
         raise ValueError("DNA mass file must contain 'sample_id' and 'DNA_mass' columns.")
 
+    dna_mass_df["sample_id"] = dna_mass_df["sample_id"].str.strip()
+    # The sample_id column defines the sample names; all input files are matched against it.
+    known_sample_ids = check_sample_ids(dna_mass_df["sample_id"])
     initial_dna_mass = dict(zip(dna_mass_df.sample_id, dna_mass_df.DNA_mass))
+    manual_map = read_sample_map(args.sample_map) if args.sample_map else {}
 
     reference_clusters_csv = args.cluster
     reference_bins_csv = args.bin
@@ -399,6 +411,25 @@ def main() -> None:
         logging.info(f"Found {len(bam_files)} BAM files to process.")
 
         # ----------------------
+        # Assign BAM files to samples (sample_id of the DNA mass file)
+        # ----------------------
+        sample_by_bam, unmatched_bams = assign_files_to_samples(bam_files, known_sample_ids, manual_map)
+        if unmatched_bams:
+            raise ValueError(unmatched_files_message(unmatched_bams, known_sample_ids, "BAM"))
+        bams_by_sample = group_by_sample(sample_by_bam)
+        multiple_bams = {sample: paths for sample, paths in bams_by_sample.items() if len(paths) > 1}
+        if multiple_bams:
+            details = "; ".join(
+                f"{sample}: {', '.join(os.path.basename(p) for p in paths)}"
+                for sample, paths in sorted(multiple_bams.items())
+            )
+            raise ValueError(
+                "BAM mode expects exactly one BAM file per sample, but several BAM files belong to the "
+                f"same sample ({details}). Merge the BAM files per sample, use --suffixes to select one, "
+                "or give the samples different sample_ids."
+            )
+
+        # ----------------------
         # Filter BAM files (optional)
         # ----------------------
         if not args.skip_filtering:
@@ -409,8 +440,17 @@ def main() -> None:
                 output_dir=output_dir,
             )
             logging.info("BAM filtering completed.")
+            # The filtered BAM files inherit the sample of the BAM file they were made from
+            sample_by_filtered_bam = {
+                filtered_bam_path(bam, output_dir, min_read_perc_identity): sample
+                for bam, sample in sample_by_bam.items()
+            }
+            sample_by_filtered_bam = {
+                bam: sample_by_filtered_bam[bam] for bam in bam_files_filtered
+            }
         else:
             bam_files_filtered = bam_files
+            sample_by_filtered_bam = sample_by_bam
             # Ensure BAM index files exist
             for bam_file in bam_files_filtered:
                 bai_file = f"{bam_file}.bai"
@@ -426,6 +466,7 @@ def main() -> None:
         logging.info("Computing raw depths with Monte Carlo error estimation...")
         calculated_depths = compute_depths_with_error(
             bam_files_filtered,
+            sample_by_bam=sample_by_filtered_bam,
             reference_clusters_csv=reference_clusters_csv,
             reference_bins_csv=reference_bins_csv,
             depth_percent=depth_percent,
@@ -442,7 +483,7 @@ def main() -> None:
         samples = set(calculated_depths["sample"])
         scaling_factors = calculate_scaling_factors(
             samples=samples,
-            bam_files=bam_files,
+            sample_by_bam=sample_by_bam,
             initial_dna_mass=initial_dna_mass,
             scaling_factors_file=scaling_factors_file,
             n_workers=args.threads,
@@ -464,9 +505,17 @@ def main() -> None:
             raise FileNotFoundError(
                 f"No FASTQ files found in {args.fastq_folder} with the specified extensions."
             )
-        fastq_files_by_sample = group_files_by_sample(fastq_files)
+        sample_by_fastq, unmatched_fastq = assign_files_to_samples(fastq_files, known_sample_ids, manual_map)
+        if unmatched_fastq:
+            logging.warning(
+                "Ignoring FASTQ file(s) that do not belong to a sample_id of the DNA mass file: "
+                f"{', '.join(os.path.basename(p) for p in unmatched_fastq)}."
+            )
+        if not sample_by_fastq:
+            raise ValueError(unmatched_files_message(unmatched_fastq, known_sample_ids, "FASTQ"))
+        fastq_files_by_sample = group_by_sample(sample_by_fastq)
         logging.info(
-            f"Found {len(fastq_files)} FASTQ files for {len(fastq_files_by_sample)} samples."
+            f"Found {len(sample_by_fastq)} FASTQ files for {len(fastq_files_by_sample)} samples."
         )
         for sample, paths in fastq_files_by_sample.items():
             if len(paths) > 2:
@@ -475,8 +524,6 @@ def main() -> None:
                     "paired-end Illumina). The bases of all files are counted; use --suffixes to "
                     "select the right files if this is not intended."
                 )
-
-        manual_map = read_sample_map(args.sample_map) if args.sample_map else {}
 
         if singlem_mode:
             # ----------------------
@@ -495,7 +542,7 @@ def main() -> None:
 
             sample_map = build_sample_map(
                 profiler_samples=singlem_df["sample"].unique(),
-                fastq_samples=fastq_files_by_sample.keys(),
+                known_ids=known_sample_ids,
                 manual_map=manual_map,
                 source="SingleM",
             )
@@ -531,7 +578,7 @@ def main() -> None:
 
             sample_map = build_sample_map(
                 profiler_samples=strains["sample"].unique(),
-                fastq_samples=fastq_files_by_sample.keys(),
+                known_ids=known_sample_ids,
                 manual_map=manual_map,
                 source="Sylph",
             )
@@ -545,23 +592,23 @@ def main() -> None:
                 f"{', '.join(unused_fastq_samples)}. They are not included in the output."
             )
 
-        samples_without_mass = sorted(samples - initial_dna_mass.keys())
-        if samples_without_mass:
-            raise ValueError(
-                "No DNA mass found in the DNA mass file for sample(s): "
-                f"{', '.join(samples_without_mass)}."
-            )
-
         # ----------------------
         # Compute scaling factors (bases counted in the FASTQ files)
         # ----------------------
         scaling_factors = calculate_scaling_factors(
             samples=samples,
-            bam_files=None,
+            sample_by_bam=None,
             initial_dna_mass=initial_dna_mass,
             scaling_factors_file=scaling_factors_file,
             n_workers=args.threads,
             fastq_files_by_sample=fastq_files_by_sample,
+        )
+
+    unused_ids = sorted(set(known_sample_ids) - set(calculated_depths["sample"]))
+    if unused_ids:
+        logging.warning(
+            "No results found for sample_id(s) in the DNA mass file: "
+            f"{', '.join(unused_ids)}. They are not included in the output."
         )
 
     # ----------------------

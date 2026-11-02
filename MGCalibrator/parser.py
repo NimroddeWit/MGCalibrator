@@ -38,7 +38,7 @@ def _count_base_pairs_in_bam(bam_path):
                 total_base_pairs += read.query_length
     return total_base_pairs
 
-def _process_bam_file(bam_path):
+def _process_bam_file(bam_path, sample_name):
     """
     Helper function to process a BAM file and count base pairs.
     Used for parallel execution.
@@ -47,6 +47,8 @@ def _process_bam_file(bam_path):
     ----------
     bam_path : str
         Path to the BAM file.
+    sample_name : str
+        Sample ID that the BAM file belongs to (see samples.assign_files_to_samples).
 
     Returns
     -------
@@ -56,22 +58,20 @@ def _process_bam_file(bam_path):
     filename = os.path.basename(bam_path)
     logging.info(f"Processing BAM file: {filename}")
 
-    # Extract sample name from filename (first two underscore-separated parts)
-    name_without_ext = filename.split('.')[0]
-    sample_name = "_".join(name_without_ext.split('_')[0:2])
     total_base_pairs = _count_base_pairs_in_bam(bam_path)
 
     logging.debug(f"Sample '{sample_name}': {total_base_pairs} base pairs counted in '{filename}'")
     return sample_name, total_base_pairs
 
-def calculate_total_base_pairs(bam_files, n_workers=None):
+def calculate_total_base_pairs(sample_by_bam, n_workers=None):
     """
-    Calculate total base pairs for each sample from a list of BAM files in parallel.
+    Calculate total base pairs for each sample from BAM files in parallel.
 
     Parameters
     ----------
-    bam_files : list of str
-        List of BAM file paths.
+    sample_by_bam : dict
+        Mapping of BAM file path -> sample ID. If several BAM files belong to the same
+        sample, their base pairs are summed.
     n_workers : int, optional
         Number of worker processes (default: os.cpu_count()).
 
@@ -83,7 +83,7 @@ def calculate_total_base_pairs(bam_files, n_workers=None):
     if n_workers is None:
         n_workers = os.cpu_count()
 
-    logging.info(f"Starting base pair calculation for {len(bam_files)} BAM files using {n_workers} workers.")
+    logging.info(f"Starting base pair calculation for {len(sample_by_bam)} BAM files using {n_workers} workers.")
 
     sample_base_pairs = {}
 
@@ -93,13 +93,14 @@ def calculate_total_base_pairs(bam_files, n_workers=None):
         initializer=_init_worker_logging
     ) as executor:
         # Submit all BAM files for processing
-        future_to_bam = {executor.submit(_process_bam_file, bam_path): bam_path for bam_path in bam_files}
+        future_to_bam = {executor.submit(_process_bam_file, bam_path, sample): bam_path
+                         for bam_path, sample in sample_by_bam.items()}
 
         for future in concurrent.futures.as_completed(future_to_bam):
             bam_path = future_to_bam[future]
             try:
                 sample_name, total_base_pairs = future.result()
-                sample_base_pairs[sample_name] = total_base_pairs
+                sample_base_pairs[sample_name] = sample_base_pairs.get(sample_name, 0) + total_base_pairs
             except Exception as exc:
                 logging.error(f"Error processing '{bam_path}': {exc}")
 

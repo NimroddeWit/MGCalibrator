@@ -35,7 +35,7 @@ MGCalibrator performs the following steps:
 ### SingleM mode
 
 1. Reads the SingleM output files (`sample`, `coverage` and `taxonomy` columns) and keeps the species-level rows.
-2. Links every SingleM sample name to the sample name derived from the FASTQ file names.
+2. Links every SingleM sample name to a `sample_id` of the DNA mass file.
 3. Counts the sequenced bases in the raw FASTQ file(s) of each sample.
 4. **Computes sample-specific scaling factors** from input DNA masses and sequenced base pairs.
 5. **Calibrates the SingleM coverage values** (used as `depth`) to absolute abundances (number of copies). No filtering or Monte Carlo simulation is performed; the error columns are `NA`.
@@ -44,7 +44,7 @@ MGCalibrator performs the following steps:
 
 1. Reads the `.sylphmpa` files and keeps the strain-level rows (`t__...`) with their coverage.
 2. **(Optional)** Reads the `sylph profile` TSV files and adds the 5th-95th percentile interval of the coverage as `error_down` / `error_up`.
-3. Links every Sylph sample to the sample name derived from the FASTQ file names.
+3. Links every Sylph sample to a `sample_id` of the DNA mass file.
 4. Counts the sequenced bases in the raw FASTQ file(s), **computes sample-specific scaling factors** and **calibrates the Sylph coverage values** (used as `depth`) to absolute abundances (number of copies).
 
 ---
@@ -135,7 +135,7 @@ mgcalibrator \
 | `--sylphmpa_extensions`      | ❌             | `.sylphmpa` file extensions to search for in folders (default: `.sylphmpa`, `.sylphmpa.gz`).                                         |
 | `--sylph_profile_extensions` | ❌             | Sylph profile file extensions to search for in folders (default: `.tsv`, `.tsv.gz`).                                                 |
 | `--suffixes`                 | ❌             | Optional list of suffixes to further filter BAM files (BAM mode) or FASTQ files (SingleM/Sylph mode) by filename, e.g. `_1 _2` to skip singleton FASTQ files. |
-| `--sample_map`               | ❌             | SingleM/Sylph mode: CSV file linking sample names in the SingleM/Sylph output to FASTQ-derived sample names, for names that cannot be matched automatically. |
+| `--sample_map`               | ❌             | CSV file linking input names (BAM/FASTQ file names or SingleM/Sylph sample names) to `sample_id`s of the DNA mass file, for names that cannot be matched automatically. |
 | `--cluster`                  | ❌             | BAM mode: CSV file mapping reference sequences to clusters (e.g., to stack alleles into one gene).                                   |
 | `--bin`                      | ❌             | BAM mode: CSV file mapping reference sequences to bins (e.g., to combine contigs from the same MAG).                                 |
 | `--dna_mass`                 | ✅             | CSV file containing measured DNA mass (in ng), with columns: `sample_id` and `DNA_mass`.                                             |
@@ -166,23 +166,24 @@ mgcalibrator \
 ### 1. **BAM files** (BAM mode)
 
 * In case of filtering they must be sorted (`.sorted.bam`).
-* Filenames should follow this format:
+* One BAM file per sample. Each file name must start with a `sample_id` of the DNA mass file, followed by `_`, `.` or `-` (see *Matching sample names* below):
 
   ```
-  sample_1_(...).sorted.bam
-  sample_2_(...).sorted.bam
+  sample_1_(...).sorted.bam   ->  sample_1
+  ERR1543552.sorted.bam       ->  ERR1543552
   ```
 
 ### 2. **FASTQ files** (SingleM and Sylph mode)
 
 * Plain or gzip-compressed, standard 4-line FASTQ format.
 * One file per sample for Nanopore reads, two files (R1 and R2) per sample for paired-end Illumina reads. The bases of all FASTQ files of a sample are summed.
-* The sample name is derived from the file name in the same way as for BAM files (first two underscore-separated parts, ignoring everything after the first dot):
+* Each file is assigned to a sample by its file name, in the same way as for BAM files (see *Matching sample names* below). Mate numbers (`_1`, `_2`, `_R1`, `_R2`) never have to be interpreted:
 
   ```
-  sample_1_(...)_1.fastq.gz   ->  sample_1
-  sample_1_(...)_2.fastq.gz   ->  sample_1
-  sample_2_(...).fastq.gz     ->  sample_2
+  ERR1543552_1.fastq.gz       ->  ERR1543552   (sample_id: ERR1543552)
+  ERR1543552_2.fastq.gz       ->  ERR1543552
+  sample_1_(...)_1.fastq.gz   ->  sample_1     (sample_id: sample_1)
+  Patient_A_001_R1.fastq.gz   ->  Patient_A_001
   ```
 
 ### 3. **SingleM output files** (SingleM mode)
@@ -199,13 +200,21 @@ mgcalibrator \
 * Only **strain-level** rows (`t__...`) are used, because Sylph only reports coverage at that level. The coverage is taken from the column `Coverage (if strain-level)` (`Eff_cov`, or `True_cov` if Sylph was run with `-u`). The complete taxonomic string (with `|` separators, as written by sylph-tax) is stored in the `reference` column of the output.
 * `--sylph_folder` accepts **multiple folders and/or files**. Files for the same sample (for example from separate Sylph runs with different databases) are combined, based on the sample name in the file header. If the same genome occurs twice for a sample, both rows are kept and a warning is given.
 * **`sylph profile` TSV files** (optional, `--sylph_profile_folder`): the output of `sylph profile` that the `.sylphmpa` files were made from. These can be single- or multi-sample files (one TSV with a `Sample_file` column is the usual output when profiling several samples at once). The `Lambda_5-95_percentile` column is used as `error_down` / `error_up`. Each `.sylphmpa` strain row is linked to its row in the profile by sample name and genome accession (the same way sylph-tax links them), and the coverage values of both files are compared as a consistency check. Rows for which Sylph could not estimate an interval (coverage too low or too high: `Eff_lambda` is `LOW` / `HIGH`) have `NA` errors. Files in the folder that are not `sylph profile` output are skipped with a warning.
-* Sample names are matched to the FASTQ files like for SingleM (see below). The directory part of the Sylph sample name is ignored.
+* Sample names are matched to the `sample_id`s like for SingleM (see below). The directory part of the Sylph sample name is ignored.
 
 > ℹ️ Sylph reports a **5th–95th percentile** interval (a 90% interval), whereas the Monte Carlo intervals of BAM mode are 95% intervals. The intervals of the two modes are therefore not directly comparable.
 
-### 5. **Matching sample names** (SingleM and Sylph mode)
+### 5. **Matching sample names** (all modes)
 
-The sample names in the SingleM/Sylph output do not need to be identical to the sample names derived from the FASTQ files. MGCalibrator matches them automatically by (in this order): the manual `--sample_map`, an exact match, applying the same naming rule as for FASTQ files (first two underscore-separated parts), or a FASTQ sample name that the SingleM/Sylph sample name starts with. If a sample cannot be matched, MGCalibrator stops and lists the unmatched names.
+The `sample_id` column of `dna_mass.csv` defines the sample names. MGCalibrator does not guess a sample name from the *structure* of a file name; it matches every input name (BAM file, FASTQ file, or sample name in the SingleM/Sylph output) against the known `sample_id`s, in this order:
+
+1. The manual `--sample_map` (see below).
+2. The name equals a `sample_id` (directory and extension ignored).
+3. The name starts with a `sample_id` followed by `_`, `.` or `-`. If several `sample_id`s match, the longest one wins (`S1_rep_R1.fastq.gz` belongs to `S1_rep`, not `S1`; `S10_R1.fastq.gz` never belongs to `S1`).
+
+`sample_id`s can therefore contain any number of underscores, dots or hyphens. Sample IDs must be unique.
+
+If a SingleM/Sylph sample or a BAM file cannot be matched, MGCalibrator stops and lists the unmatched names. FASTQ files that match no `sample_id` are ignored with a warning, as are `sample_id`s without any results. In BAM mode, several BAM files for one sample give an error (merge them first). Every assignment is logged (`Assigned 'x' -> sample 'y'`), so you can check it.
 
 ### 6. **dna_mass.csv**
 
@@ -214,7 +223,7 @@ The sample names in the SingleM/Sylph output do not need to be identical to the 
 | sample_1  | 22.5     |
 | sample_2  | 31.1     |
 
-* The `sample_id` column must match the prefixes of the BAM files (BAM mode) or the sample names derived from the FASTQ files (SingleM and Sylph mode).
+* The `sample_id` column must be unique and must be the prefix of the corresponding BAM/FASTQ file names (see *Matching sample names*).
 
 ### 7. **reference_clusters.csv (optional, BAM mode)**
 
@@ -232,10 +241,16 @@ The sample names in the SingleM/Sylph output do not need to be identical to the 
 
 > ⚠️ Clustered references cannot also be binned.
 
-### 9. **sample_map.csv (optional, SingleM and Sylph mode)**
+### 9. **sample_map.csv (optional, all modes)**
 
-| singlem_sample | sample_id |
-| -------------- | --------- |
+| name         | sample_id |
+| ------------ | --------- |
+| my_odd_name  | sample_1  |
+
+* `name` can be a BAM/FASTQ file name (with or without extension) or a sample name as written in the SingleM/Sylph output. Only needed for names that do not start with their `sample_id`.
+* The first column may also be called `singlem_sample` or `sylph_sample`.
+
+-------------- | --------- |
 | my_odd_name    | sample_1  |
 
 The first column may also be called `sylph_sample`.
@@ -328,7 +343,7 @@ Final absolute abundances (in number of copies) are derived by multiplying scale
 ### SingleM and Sylph mode
 
 1. The coverage values (SingleM: species-level `coverage`; Sylph: strain-level `Coverage (if strain-level)`) are read from the SingleM/Sylph files and used as depths. For Sylph, the confidence intervals are read from the profile files if supplied.
-2. SingleM/Sylph sample names are linked to the sample names derived from the FASTQ file names.
+2. SingleM/Sylph sample names are linked to the `sample_id`s of the DNA mass file.
 3. The bases in the FASTQ file(s) of each sample are counted (all files of a sample are summed) and the scaling factor is computed with the same formula as in BAM mode.
 4. The depths (and errors) are multiplied by the scaling factor.
 

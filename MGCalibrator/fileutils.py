@@ -81,27 +81,29 @@ DEFAULT_FASTQ_EXTENSIONS = [".fastq.gz", ".fq.gz", ".fastq", ".fq"]
 DEFAULT_SINGLEM_EXTENSIONS = [".tsv", ".tsv.gz"]
 
 
-def get_sample_name(path_or_name: str) -> str:
+# Extensions that are removed from a file name to obtain its stem (longest match first)
+_KNOWN_EXTENSIONS = sorted(
+    [
+        ext + gz
+        for ext in (".fastq", ".fq", ".sorted.bam", ".sort.bam", ".bam", ".sylphmpa", ".tsv")
+        for gz in ("", ".gz", ".gzip")
+    ],
+    key=len,
+    reverse=True,
+)
+
+
+def strip_extension(path_or_name: str) -> str:
     """
-    Derive the MGCalibrator sample name from a file name or a SingleM sample name.
-
-    The sample name consists of the first two underscore-separated parts of the
-    base name, ignoring everything after the first dot. For example,
-    'sample_1_input_R1.fastq.gz' -> 'sample_1'.
-
-    Parameters
-    ----------
-    path_or_name : str
-        File path, file name or sample name.
-
-    Returns
-    -------
-    str
-        The derived sample name.
+    Remove the directory and a known file extension (FASTQ, BAM, .sylphmpa, .tsv, with an
+    optional .gz) from a file path. Unlike splitting at the first dot, this keeps dots
+    that are part of the name: 'S1.2_R1.fastq.gz' -> 'S1.2_R1'.
     """
     base_name = os.path.basename(path_or_name)
-    name_without_ext = base_name.split(".")[0]
-    return "_".join(name_without_ext.split("_")[0:2])
+    for ext in _KNOWN_EXTENSIONS:
+        if base_name.endswith(ext) and len(base_name) > len(ext):
+            return base_name[: -len(ext)]
+    return base_name
 
 
 def list_files_by_extension(
@@ -153,25 +155,6 @@ def list_files_by_extension(
 
     return files
 
-
-def group_files_by_sample(files: List[str]) -> Dict[str, List[str]]:
-    """
-    Group file paths by the sample name derived from their file names.
-
-    Parameters
-    ----------
-    files : list of str
-        File paths (e.g. FASTQ files).
-
-    Returns
-    -------
-    dict
-        Mapping of sample name -> sorted list of file paths.
-    """
-    grouped: Dict[str, List[str]] = {}
-    for path in files:
-        grouped.setdefault(get_sample_name(path), []).append(path)
-    return {sample: sorted(paths) for sample, paths in grouped.items()}
 
 DEFAULT_SYLPH_EXTENSIONS = [".sylphmpa", ".sylphmpa.gz"]
 DEFAULT_SYLPH_PROFILE_EXTENSIONS = [".tsv", ".tsv.gz"]

@@ -18,6 +18,7 @@ import pandas as pd
 import pysam
 
 # Local package imports
+from .fileutils import strip_extension
 from .parser import calculate_total_base_pairs, calculate_total_base_pairs_fastq
 
 
@@ -56,6 +57,15 @@ def get_mean_central_depth(depth_values, keep_percent):
     central_depths = depths[start_idx:end_idx]
     return np.mean(central_depths)
 
+def filtered_bam_path(bam_file: str, output_dir: str, min_read_perc_identity: float) -> str:
+    """
+    Path of the filtered BAM file that `run_coverm_filter` writes for `bam_file`:
+    '<name>.sorted.bam' (or '.sort.bam' / '.bam') -> '<output_dir>/<name>_filtered<pct>.bam'.
+    """
+    stem = strip_extension(bam_file)
+    return os.path.join(output_dir, f"{stem}_filtered{int(min_read_perc_identity)}.bam")
+
+
 def run_coverm_filter(
     bam_files: List[str],
     min_read_perc_identity: float,
@@ -89,14 +99,7 @@ def run_coverm_filter(
 
     def process_bam(bam_file: str) -> str:
         """Run CoverM and samtools index on a single BAM file."""
-        filename = os.path.basename(bam_file)
-        output_bam = os.path.join(
-            output_dir,
-            filename.replace(
-                ".sorted.bam",
-                f"_filtered{int(min_read_perc_identity)}.bam"
-            )
-        )
+        output_bam = filtered_bam_path(bam_file, output_dir, min_read_perc_identity)
 
         coverm_cmd = [
             "coverm", "filter",
@@ -517,6 +520,7 @@ def MC_simulation_for_depth(
 
 def process_bam_file(
     bam_file: str,
+    sample_name: str,
     reference_clusters_csv: str | None,
     reference_bins_csv: str | None,
     depth_percent: float,
@@ -534,6 +538,8 @@ def process_bam_file(
     ----------
     bam_file : str
         Path to the BAM file.
+    sample_name : str
+        Sample ID that the BAM file belongs to.
     reference_clusters_csv : str | None
         Path to CSV defining clusters. If None, clustering is skipped.
     reference_bins_csv : str | None
@@ -554,10 +560,6 @@ def process_bam_file(
     list[dict]
         List of dictionaries with raw results per reference.
     """
-    filename = os.path.basename(bam_file)
-    name_without_ext = filename.split('.')[0]
-    sample_name = "_".join(name_without_ext.split('_')[0:2])
-
     logging.info(f"Creating reads_dict and depth_dict for {sample_name}...")
     depth_dict = get_depth_dict_with_samtools(bam_file)
     reads_dict = get_reads_dict_from_bam(bam_file)
@@ -611,6 +613,7 @@ def process_bam_file(
 
 def compute_depths_with_error(
     bam_files_filtered: List[str],
+    sample_by_bam: Dict[str, str],
     reference_clusters_csv: Optional[str] = None,
     reference_bins_csv: Optional[str] = None,
     depth_percent: float = 50.0,
@@ -627,6 +630,8 @@ def compute_depths_with_error(
     ----------
     bam_files_filtered : List[str]
         List of paths to filtered BAM files.
+    sample_by_bam : Dict[str, str]
+        Mapping of each BAM file path in `bam_files_filtered` to its sample ID.
     reference_clusters_csv : Optional[str]
         CSV defining clusters for references. If None, clustering is skipped.
     reference_bins_csv : Optional[str]
@@ -656,6 +661,7 @@ def compute_depths_with_error(
             executor.submit(
                 process_bam_file,
                 bam_file,
+                sample_by_bam[bam_file],
                 reference_clusters_csv,
                 reference_bins_csv,
                 depth_percent,
@@ -674,7 +680,7 @@ def compute_depths_with_error(
 
 def calculate_scaling_factors(
     samples,
-    bam_files,
+    sample_by_bam,
     initial_dna_mass,
     scaling_factors_file,
     n_workers=None,
@@ -689,7 +695,7 @@ def calculate_scaling_factors(
 
     Args:
         samples (iterable): Sample names to calculate scaling factors for.
-        bam_files (list[str] or None): Paths to BAM files (BAM mode).
+        sample_by_bam (dict[str, str] or None): Sample ID per BAM file path (BAM mode).
         initial_dna_mass (dict): Initial DNA mass per sample.
         scaling_factors_file (str): Path to file to read/write scaling factors.
         n_workers (int, optional): Number of parallel workers for base pair calculation.
@@ -700,7 +706,7 @@ def calculate_scaling_factors(
     Returns:
         dict: Scaling factors keyed by sample name.
     """
-    if bool(bam_files) == bool(fastq_files_by_sample):
+    if bool(sample_by_bam) == bool(fastq_files_by_sample):
         raise ValueError("Provide either BAM files or FASTQ files to calculate scaling factors, not both.")
 
     scaling_factors = {}
@@ -732,7 +738,7 @@ def calculate_scaling_factors(
             source = "FASTQ file(s)"
         else:
             # BAM mode: count bases in the BAM files
-            sample_base_pairs = calculate_total_base_pairs(bam_files=bam_files, n_workers=n_workers)
+            sample_base_pairs = calculate_total_base_pairs(sample_by_bam=sample_by_bam, n_workers=n_workers)
             source = "BAM files"
 
         # Calculate final DNA mass from the counted bases
