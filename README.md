@@ -6,7 +6,7 @@ It converts sequencing-derived coverage information into **absolute abundances (
 
 * **BAM mode**: BAM files as input. Results include **statistical confidence intervals**.
 * **SingleM mode**: SingleM output files + the raw FASTQ files as input. The SingleM species-level coverage values are used as depths.
-* **Sylph mode**: Sylph results (`.sylphmpa` files from `sylph-tax taxprof`, optionally with the `sylph profile` TSV files) + the raw FASTQ files as input. The Sylph strain-level coverage values are used as depths. Sylph's confidence intervals can be included.
+* **Sylph mode**: Sylph results (`.sylphmpa` files from `sylph-tax taxprof`, optionally with the `sylph profile` TSV files) + the raw FASTQ files as input. The Sylph strain-level coverage values (`True_cov`) are used as depths. Confidence intervals can be calculated from the estimated read counts of Sylph. **Sylph must be run with `--estimate-unknown`, and with `--estimate-read-counts` if you want confidence intervals** (see [Preparing Sylph input](#-preparing-sylph-input)).
 
 All modes produce an output file with the same columns.
 
@@ -43,7 +43,7 @@ MGCalibrator performs the following steps:
 ### Sylph mode
 
 1. Reads the `.sylphmpa` files and keeps the strain-level rows (`t__...`) with their coverage.
-2. **(Optional)** Reads the `sylph profile` TSV files and adds the 5th-95th percentile interval of the coverage as `error_down` / `error_up`.
+2. **(Optional)** Reads the `sylph profile` TSV files (run with `--estimate-read-counts`) and takes the estimated number of reads per genome. From this, a **95% confidence interval around the coverage** is calculated (`error_down` / `error_up`): the read count is simulated with a Poisson distribution and the resulting relative interval is applied to the coverage. The confidence intervals that Sylph reports itself are **not** used. The interval is combined with `--qubit_error` after the calibration.
 3. Links every Sylph sample to a `sample_id` of the DNA mass file.
 4. Counts the sequenced bases in the raw FASTQ file(s), **computes sample-specific scaling factors** and **calibrates the Sylph coverage values** (used as `depth`) to absolute abundances (number of copies).
 
@@ -106,7 +106,7 @@ mgcalibrator \
     --scaling_factors data/output/scaling_factors.txt
 ```
 
-**Sylph mode** (here with two Sylph databases and confidence intervals):
+**Sylph mode** (here with two Sylph databases and confidence intervals; Sylph was run with `--estimate-read-counts`):
 
 ```bash
 mgcalibrator \
@@ -126,8 +126,8 @@ mgcalibrator \
 |------------------------------|:--------------:|--------------------------------------------------------------------------------------------------------------------------------------|
 | `--bam_folder`               | ✅ (BAM)        | BAM mode: folder containing input `.bam` files.                                                                                      |
 | `--singlem_folder`           | ✅ (SingleM)    | SingleM mode: folder containing the SingleM output files (standard taxonomic profile TSV). Requires `--fastq_folder`.                |
-| `--sylph_folder`             | ✅ (Sylph)      | Sylph mode: one or more folders (or files) with `.sylphmpa` files. Requires `--fastq_folder`.                                        |
-| `--sylph_profile_folder`     | ❌             | Sylph mode: one or more folders (or files) with the `sylph profile` output TSV files, to add confidence intervals.                    |
+| `--sylph_folder`             | ✅ (Sylph)      | Sylph mode: one or more folders (or files) with `.sylphmpa` files. Sylph must be run with `--estimate-unknown`. Requires `--fastq_folder`. |
+| `--sylph_profile_folder`     | ❌             | Sylph mode: one or more folders (or files) with the `sylph profile` output TSV files, to calculate confidence intervals from the estimated read counts. Requires Sylph to be run with `--estimate-read-counts`. |
 | `--fastq_folder`             | ✅ (SingleM/Sylph) | SingleM/Sylph mode: folder containing the raw FASTQ files (plain or gzip-compressed): 1 file per sample for Nanopore reads, 2 files per sample for paired-end Illumina reads. |
 | `--extensions`               | ❌             | BAM mode: file extensions to search for (default: `.sorted.bam`, `.sort.bam`).                                                       |
 | `--fastq_extensions`         | ❌             | FASTQ file extensions to search for (default: `.fastq.gz`, `.fq.gz`, `.fastq`, `.fq`).                                               |
@@ -155,7 +155,7 @@ mgcalibrator \
 **Note:**
 * Use exactly one input mode: `--bam_folder`, **or** `--singlem_folder` + `--fastq_folder`, **or** `--sylph_folder` + `--fastq_folder`. Providing several modes (or none) is an error.
 * Options that do not apply to the selected mode are ignored, with a warning.
-* The `--qubit_error` option allows you to propagate laboratory measurement error into the uncertainty analysis. It needs confidence intervals, so it is only used in BAM mode and in Sylph mode with `--sylph_profile_folder`.
+* The `--qubit_error` option allows you to propagate laboratory measurement error into the uncertainty analysis. It needs confidence intervals, so it is only used in BAM mode and in Sylph mode with `--sylph_profile_folder` (Sylph run with `--estimate-read-counts`). The relative error of the interval and the Qubit error are combined in quadrature: `sqrt(relative_error² + qubit_error²)`, separately for the lower and upper side.
 * In BAM mode, error estimation is performed using Monte Carlo simulations, but can be disabled with `--skip_error_calculation` if you only want point estimates.
 
 
@@ -199,10 +199,14 @@ mgcalibrator \
 * **`.sylphmpa` files** (required), the output of `sylph-tax taxprof`. `sylph-tax taxprof` writes one `.sylphmpa` file per sample; the sample name (the `Sample_file` of Sylph) is stored in the `#SampleID` header line of each file, so the file names do not matter. There is no merged `.sylphmpa` table with coverage (`sylph-tax merge` only supports ANI and abundances), so give the per-sample files.
 * Only **strain-level** rows (`t__...`) are used, because Sylph only reports coverage at that level. The coverage is taken from the column `Coverage (if strain-level)` (`Eff_cov`, or `True_cov` if Sylph was run with `-u`). The complete taxonomic string (with `|` separators, as written by sylph-tax) is stored in the `reference` column of the output.
 * `--sylph_folder` accepts **multiple folders and/or files**. Files for the same sample (for example from separate Sylph runs with different databases) are combined, based on the sample name in the file header. If the same genome occurs twice for a sample, both rows are kept and a warning is given.
-* **`sylph profile` TSV files** (optional, `--sylph_profile_folder`): the output of `sylph profile` that the `.sylphmpa` files were made from. These can be single- or multi-sample files (one TSV with a `Sample_file` column is the usual output when profiling several samples at once). The `Lambda_5-95_percentile` column is used as `error_down` / `error_up`. Each `.sylphmpa` strain row is linked to its row in the profile by sample name and genome accession (the same way sylph-tax links them), and the coverage values of both files are compared as a consistency check. Rows for which Sylph could not estimate an interval (coverage too low or too high: `Eff_lambda` is `LOW` / `HIGH`) have `NA` errors. Files in the folder that are not `sylph profile` output are skipped with a warning.
+* **`sylph profile` TSV files** (optional, `--sylph_profile_folder`): the output of `sylph profile` that the `.sylphmpa` files were made from. They are only needed for the confidence intervals, and **only work if Sylph was run with `--estimate-read-counts`** (then the `Sequence_abundance` column holds estimated read counts instead of percentages). These can be single- or multi-sample files (one TSV with a `Sample_file` column is the usual output when profiling several samples at once). Each `.sylphmpa` strain row is linked to its row in the profile by sample name and genome accession (the same way sylph-tax links them), and the coverage values of both files are compared as a consistency check. Rows that cannot be linked have `NA` errors. If the `Sequence_abundance` of a sample looks like percentages (sums to at most 100), MGCalibrator gives a warning and no interval is calculated for that sample; if this is the case for all samples, MGCalibrator stops with an error. Files in the folder that are not `sylph profile` output are skipped with a warning.
 * Sample names are matched to the `sample_id`s like for SingleM (see below). The directory part of the Sylph sample name is ignored.
 
-> ℹ️ Sylph reports a **5th–95th percentile** interval (a 90% interval), whereas the Monte Carlo intervals of BAM mode are 95% intervals. The intervals of the two modes are therefore not directly comparable.
+**How the confidence interval is calculated.** The number of reads of a genome is Poisson distributed, and the coverage is directly proportional to the number of reads. For every genome, MGCalibrator simulates 500 Poisson draws around the estimated read count (`numpy.random.poisson`), takes the 2.5th and 97.5th percentile, and applies the ratio of these percentiles to the read count to the coverage. Example: a genome with coverage 0.5 and 1,000 reads gets a coverage interval of about 0.47–0.53; with 100,000 reads the interval is about 0.497–0.503. The interval is therefore narrow for genomes with many reads and wide for genomes with few reads.
+
+* The interval only reflects the sampling noise of the reads. The estimated read counts themselves are rough estimates by Sylph (reads = depth × genome size / average read length).
+* Because the interval comes from a simulation, repeated runs give slightly different (but practically equal) values.
+* The interval is a 95% interval, like the Monte Carlo intervals in BAM mode.
 
 ### 5. **Matching sample names** (all modes)
 
@@ -262,12 +266,15 @@ The first column may also be called `sylph_sample`.
 1. **Run Sylph.** Profiling several samples in one run is normal: all samples end up in one TSV file with a `Sample_file` column.
 
    ```bash
-   sylph profile db1.syldb db2.syldb -1 A_1.fastq.gz B_1.fastq.gz -2 A_2.fastq.gz B_2.fastq.gz -o profiles.tsv
+   sylph profile db1.syldb db2.syldb -1 A_1.fastq.gz B_1.fastq.gz -2 A_2.fastq.gz B_2.fastq.gz \
+       --estimate-unknown --estimate-read-counts -o profiles.tsv
    ```
 
    If you use several databases, give them to the **same** `sylph profile` run where possible, so that Sylph can handle all genomes together. Separate runs per database are also supported, but then the same reads can contribute to genomes of different databases.
 
-   Sylph's `Eff_cov` slightly underestimates the true sequencing depth. With `sylph profile -u`, Sylph reports `True_cov` instead; MGCalibrator supports both (the confidence intervals are rescaled automatically).
+   > ⚠️ **Always run Sylph with `--estimate-unknown` (`-u`).** Without it, Sylph reports the effective coverage (`Eff_cov`), which underestimates the true sequencing depth. With `--estimate-unknown`, Sylph reports the true coverage (`True_cov`), which is much more accurate (see the Sylph paper). MGCalibrator assumes that the coverage in the `.sylphmpa` files is the true coverage.
+   >
+   > ⚠️ **If you want confidence intervals, also run Sylph with `--estimate-read-counts`** (Sylph ≥ 0.9.0; this implies `--estimate-unknown`). Sylph then writes the estimated number of reads per genome to the `Sequence_abundance` column, which MGCalibrator uses to calculate the confidence interval of the coverage (see above). Without this flag, no confidence intervals (and no Qubit error propagation) are possible.
 
 2. **Add taxonomy with sylph-tax.** The `-t` option must match the databases used for Sylph; use multiple identifiers if the run used multiple databases.
 
@@ -277,7 +284,7 @@ The first column may also be called `sylph_sample`.
 
    This writes one `.sylphmpa` file per sample (named after the sample). If you profiled each database separately, put the `.sylphmpa` files of each database in their own folder (or use a different `-o` prefix): `sylph-tax` refuses to write files with the same name twice.
 
-3. **Run MGCalibrator** on the folder(s) with `.sylphmpa` files, the Sylph profile TSV file(s) (optional, for confidence intervals) and the FASTQ files:
+3. **Run MGCalibrator** on the folder(s) with `.sylphmpa` files, the Sylph profile TSV file(s) (optional, for confidence intervals; requires `--estimate-read-counts`) and the FASTQ files:
 
    ```bash
    mgcalibrator \
@@ -302,7 +309,7 @@ The main output is a CSV with the following columns (identical in all modes):
 
 * **BAM mode**: `reference` is the reference sequence (or cluster/bin), `depth` the mean depth with Monte Carlo errors.
 * **SingleM mode**: `reference` is the full SingleM taxonomy string of the species, `depth` is the SingleM `coverage`, and all error columns are `NA`.
-* **Sylph mode**: `reference` is the full taxonomic string of the strain (including the `t__` genome identifier), `depth` is the Sylph coverage. The error columns are filled from the Sylph confidence intervals if `--sylph_profile_folder` is given (`NA` otherwise or where no interval is available).
+* **Sylph mode**: `reference` is the full taxonomic string of the strain (including the `t__` genome identifier), `depth` is the Sylph coverage (`True_cov`). The error columns are calculated from the Poisson confidence interval of the coverage if `--sylph_profile_folder` is given (`NA` otherwise or where no read count is available).
 
 ---
 
@@ -342,7 +349,7 @@ Final absolute abundances (in number of copies) are derived by multiplying scale
 
 ### SingleM and Sylph mode
 
-1. The coverage values (SingleM: species-level `coverage`; Sylph: strain-level `Coverage (if strain-level)`) are read from the SingleM/Sylph files and used as depths. For Sylph, the confidence intervals are read from the profile files if supplied.
+1. The coverage values (SingleM: species-level `coverage`; Sylph: strain-level `Coverage (if strain-level)`) are read from the SingleM/Sylph files and used as depths. For Sylph, the estimated read counts are read from the profile files if supplied, and a Poisson confidence interval around the coverage is calculated from them.
 2. SingleM/Sylph sample names are linked to the `sample_id`s of the DNA mass file.
 3. The bases in the FASTQ file(s) of each sample are counted (all files of a sample are summed) and the scaling factor is computed with the same formula as in BAM mode.
 4. The depths (and errors) are multiplied by the scaling factor.

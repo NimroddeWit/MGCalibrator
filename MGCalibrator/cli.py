@@ -51,7 +51,8 @@ from .samples import (
 )
 from .singlem import read_singlem_tables, singlem_to_depth_table
 from .sylph import (
-    add_confidence_intervals,
+    add_poisson_confidence_intervals,
+    add_read_counts,
     read_sylph_profiles,
     read_sylphmpa_files,
     sylph_to_depth_table,
@@ -96,7 +97,9 @@ def main() -> None:
         "  1. BAM mode:      --bam_folder\n"
         "  2. SingleM mode:  --singlem_folder together with --fastq_folder\n"
         "  3. Sylph mode:    --sylph_folder together with --fastq_folder\n"
-        "                    (optionally --sylph_profile_folder for confidence intervals)\n\n"
+        "                    (optionally --sylph_profile_folder for confidence intervals;\n"
+        "                    run Sylph with --estimate-unknown, and with --estimate-read-counts\n"
+        "                    if you want confidence intervals)\n\n"
         "Example usage (BAM mode):\n"
         "  mgcalibrator \\\n"
         "    --bam_folder data/bams \\\n"
@@ -144,7 +147,8 @@ def main() -> None:
             "`sylph-tax taxprof` (one file per sample). Results of separate Sylph runs, e.g. with\n"
             "different databases, can be given together; files of the same sample are combined\n"
             "using the sample name in the file header. Only strain-level rows are used.\n"
-            "Requires --fastq_folder."
+            "Sylph must have been run with --estimate-unknown (-u), so that the coverage is the\n"
+            "true coverage (True_cov). Requires --fastq_folder."
         ),
     )
     parser.add_argument(
@@ -153,8 +157,11 @@ def main() -> None:
         help=(
             "Sylph mode (optional): one or more folders (or files) with the `sylph profile` output\n"
             "TSV files that the .sylphmpa files were made from (single- or multi-sample TSVs).\n"
-            "Used to add the Sylph confidence intervals (5th-95th percentile of Eff_lambda) as\n"
-            "error_down and error_up."
+            "Used to calculate confidence intervals around the coverage (error_down and error_up):\n"
+            "the estimated number of reads per genome (column Sequence_abundance) is simulated\n"
+            "with a Poisson distribution and the resulting relative 95% interval is applied to\n"
+            "the coverage. Requires `sylph profile --estimate-read-counts` (Sylph >= 0.9.0).\n"
+            "The confidence intervals that Sylph reports itself are not used."
         ),
     )
     parser.add_argument(
@@ -566,6 +573,10 @@ def main() -> None:
             logging.info(f"Found {len(sylphmpa_files)} .sylphmpa files.")
             strains = read_sylphmpa_files(sylphmpa_files)
 
+            logging.info(
+                "Sylph mode: the coverage in the .sylphmpa files is assumed to be the true coverage "
+                "(Sylph run with --estimate-unknown)."
+            )
             if args.sylph_profile_folder is not None:
                 profile_files = collect_files(args.sylph_profile_folder, args.sylph_profile_extensions)
                 if not profile_files:
@@ -574,7 +585,9 @@ def main() -> None:
                         f"{' '.join(args.sylph_profile_folder)} with the specified extensions."
                     )
                 logging.info(f"Found {len(profile_files)} Sylph profile files.")
-                strains = add_confidence_intervals(strains, read_sylph_profiles(profile_files))
+                # Confidence intervals: Poisson simulation on the estimated read counts of each genome
+                strains = add_read_counts(strains, read_sylph_profiles(profile_files))
+                strains = add_poisson_confidence_intervals(strains)
 
             sample_map = build_sample_map(
                 profiler_samples=strains["sample"].unique(),

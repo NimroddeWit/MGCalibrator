@@ -15,7 +15,9 @@ from MGCalibrator.samples import (
 )
 from MGCalibrator.singlem import read_singlem_tables, singlem_to_depth_table
 from MGCalibrator.sylph import (
-    add_confidence_intervals,
+    add_poisson_confidence_intervals,
+    add_read_counts,
+    poisson_coverage_ci,
     read_sylph_profiles,
     read_sylphmpa_files,
     sylph_to_depth_table,
@@ -37,8 +39,9 @@ def write_sylphmpa(path, sample, rows):
     path.write_text("".join(lines))
 
 
-def profile_row(sample, genome, cov, lam, ci, contig="NC_1 Escherichia coli"):
-    return (f"{sample}\t{genome}\t50\t50\t99.0\t{cov}\tNA-NA\t{lam}\t{ci}\t1\t1.0\t10/20\t99.0\t0\t{contig}\n")
+def profile_row(sample, genome, cov, reads, contig="NC_1 Escherichia coli"):
+    # The Sylph confidence interval columns (Eff_lambda, Lambda_5-95_percentile) are ignored by MGCalibrator
+    return (f"{sample}\t{genome}\t50\t{reads}\t99.0\t{cov}\tNA-NA\t{cov}\t0.01-9.99\t1\t1.0\t10/20\t99.0\t0\t{contig}\n")
 
 
 # ----------------------------------------------------------------------
@@ -101,7 +104,7 @@ def test_pavian_sylphmpa_is_rejected(tmp_path):
 
 
 # ----------------------------------------------------------------------
-# Sylph: profile TSV -> confidence intervals
+# Sylph: profile TSV -> read counts -> Poisson confidence intervals
 # ----------------------------------------------------------------------
 def make_strains(tmp_path, sample="s1_x.fq.gz"):
     f = tmp_path / "s.sylphmpa"
@@ -112,51 +115,105 @@ def make_strains(tmp_path, sample="s1_x.fq.gz"):
     return read_sylphmpa_files([str(f)])
 
 
-def test_confidence_intervals_joined_on_sample_and_accession(tmp_path):
-    p = tmp_path / "profile.tsv"
-    p.write_text(
-        PROFILE_HEADER.format(cov="Eff_cov")
-        + profile_row("s1_x.fq.gz", "GCF_000005845.2_ASM584v2_genomic.fna.gz", "0.412", "0.412", "0.25-0.61")
-        + profile_row("s1_x.fq.gz", "GCF_000009045.1_ASM904v1_genomic.fna.gz", "12.350", "HIGH", "NA-NA")
-        + profile_row("other.fq.gz", "GCF_000005845.2_ASM584v2_genomic.fna.gz", "0.412", "0.412", "0.01-0.99")
-    )
-    result = add_confidence_intervals(make_strains(tmp_path), read_sylph_profiles([str(p)]))
-    ecoli, bsub = result.iloc[0], result.iloc[1]
-    assert (ecoli["lower_ci"], ecoli["upper_ci"]) == (0.25, 0.61)
-    assert np.isnan(bsub["lower_ci"]) and np.isnan(bsub["upper_ci"])  # HIGH coverage: no interval
+ECOLI = "GCF_000005845.2_ASM584v2_genomic.fna.gz"
+BSUB = "GCF_000009045.1_ASM904v1_genomic.fna.gz"
 
 
-def test_true_cov_rescales_interval(tmp_path):
+def test_read_counts_joined_on_sample_and_accession(tmp_path):
     p = tmp_path / "profile.tsv"
-    # True_cov (0.824) is twice Eff_lambda (0.412), so the interval is doubled
     p.write_text(
         PROFILE_HEADER.format(cov="True_cov")
-        + profile_row("s1_x.fq.gz", "GCF_000005845.2_ASM584v2_genomic.fna.gz", "0.412", "0.206", "0.10-0.30")
+        + profile_row("s1_x.fq.gz", ECOLI, "0.412", "12700")
+        + profile_row("s1_x.fq.gz", BSUB, "12.350", "346000")
+        + profile_row("other.fq.gz", ECOLI, "0.412", "999")
     )
-    profiles = read_sylph_profiles([str(p)])
-    assert profiles.loc[0, "ci_low"] == pytest.approx(0.20)
-    assert profiles.loc[0, "ci_high"] == pytest.approx(0.60)
+    result = add_read_counts(make_strains(tmp_path), read_sylph_profiles([str(p)]))
+    assert list(result["read_counts"]) == [12700, 346000]
 
 
-def test_inconsistent_coverage_gives_no_interval(tmp_path):
+def test_sylph_confidence_intervals_are_not_used(tmp_path):
+    # The profile has a very wide Sylph interval (0.01-9.99); the result must only depend on the read count
+    p = tmp_path / "profile.tsv"
+    p.write_text(PROFILE_HEADER.format(cov="True_cov") + profile_row("s1_x.fq.gz", ECOLI, "0.412", "1000000"))
+    strains = add_read_counts(make_strains(tmp_path), read_sylph_profiles([str(p)]))
+    result = add_poisson_confidence_intervals(strains, rng=np.random.default_rng(1))
+    assert result.loc[0, "lower_ci"] == pytest.approx(0.412 * 0.998, abs=0.002)
+    assert result.loc[0, "upper_ci"] == pytest.approx(0.412 * 1.002, abs=0.002)
+
+
+def test_inconsistent_coverage_gives_no_read_counts(tmp_path):
+    p = tmp_path / "profile.tsv"
+    p.write_text(PROFILE_HEADER.format(cov="True_cov") + profile_row("s1_x.fq.gz", ECOLI, "0.900", "12700"))
+    result = add_read_counts(make_strains(tmp_path), read_sylph_profiles([str(p)]))
+    assert result["read_counts"].isna().all()
+
+
+def test_percentages_instead_of_read_counts_are_rejected(tmp_path):
+    # Sylph run without --estimate-read-counts: Sequence_abundance is a percentage (sums to 100)
     p = tmp_path / "profile.tsv"
     p.write_text(
-        PROFILE_HEADER.format(cov="Eff_cov")
-        + profile_row("s1_x.fq.gz", "GCF_000005845.2_ASM584v2_genomic.fna.gz", "0.900", "0.900", "0.5-1.2")
+        PROFILE_HEADER.format(cov="True_cov")
+        + profile_row("s1_x.fq.gz", ECOLI, "0.412", "60.0")
+        + profile_row("s1_x.fq.gz", BSUB, "12.350", "40.0")
     )
-    result = add_confidence_intervals(make_strains(tmp_path), read_sylph_profiles([str(p)]))
-    assert result["lower_ci"].isna().all()
+    with pytest.raises(ValueError, match="--estimate-read-counts"):
+        read_sylph_profiles([str(p)])
+
+
+def test_percentage_samples_among_read_count_samples_get_no_interval(tmp_path, caplog):
+    p = tmp_path / "profile.tsv"
+    p.write_text(
+        PROFILE_HEADER.format(cov="True_cov")
+        + profile_row("s1_x.fq.gz", ECOLI, "0.412", "12700")
+        + profile_row("pct.fq.gz", ECOLI, "0.412", "100.0")
+    )
+    profiles = read_sylph_profiles([str(p)])
+    assert profiles.set_index("sample")["read_counts"].isna().to_dict() == {"s1_x.fq.gz": False, "pct.fq.gz": True}
+    assert "pct.fq.gz" in caplog.text
+
+
+def test_effective_coverage_gives_warning(tmp_path, caplog):
+    p = tmp_path / "profile.tsv"
+    p.write_text(PROFILE_HEADER.format(cov="Eff_cov") + profile_row("s", "GCF_1.1_ASM1v1_genomic.fna.gz", "1.000", "5000"))
+    read_sylph_profiles([str(p)])
+    assert "--estimate-unknown" in caplog.text
 
 
 def test_non_profile_tsv_is_skipped(tmp_path):
     good = tmp_path / "profile.tsv"
-    good.write_text(PROFILE_HEADER.format(cov="Eff_cov")
-                    + profile_row("s", "GCF_1.1_ASM1v1_genomic.fna.gz", "1.000", "1.000", "0.5-1.5"))
+    good.write_text(PROFILE_HEADER.format(cov="True_cov")
+                    + profile_row("s", "GCF_1.1_ASM1v1_genomic.fna.gz", "1.000", "5000"))
     other = tmp_path / "merged.tsv"
     other.write_text("clade_name\ts1\nd__A\t1\n")
     assert len(read_sylph_profiles([str(good), str(other)])) == 1
     with pytest.raises(ValueError):
         read_sylph_profiles([str(other)])
+
+
+def test_poisson_ci_matches_the_documented_examples():
+    rng = np.random.default_rng(42)
+    # Same coverage, 1,000 vs 100,000 reads: relative interval about +-6% vs +-0.6%
+    lower, upper = poisson_coverage_ci([0.5, 0.5], [1000, 100000], n_simulations=2000, rng=rng)
+    assert (lower[0], upper[0]) == pytest.approx((0.47, 0.53), abs=0.005)
+    assert (lower[1], upper[1]) == pytest.approx((0.497, 0.503), abs=0.001)
+
+
+def test_poisson_ci_contains_coverage_and_handles_missing_values():
+    coverage = [0.5, 0.5, 0.5, np.nan, 0.5]
+    reads = [3, 0, np.nan, 100, -5]
+    lower, upper = poisson_coverage_ci(coverage, reads, rng=np.random.default_rng(0))
+    assert lower[0] <= 0.5 <= upper[0]
+    assert np.isnan(lower[1:]).all() and np.isnan(upper[1:]).all()
+
+
+def test_poisson_ci_is_reproducible_with_seed_and_batched():
+    coverage, reads = np.full(25, 1.0), np.linspace(10, 5000, 25)
+    a = poisson_coverage_ci(coverage, reads, rng=np.random.default_rng(7), batch_size=4)
+    b = poisson_coverage_ci(coverage, reads, rng=np.random.default_rng(7), batch_size=4)
+    np.testing.assert_array_equal(a[0], b[0])
+    # More reads -> narrower interval
+    width = a[1] - a[0]
+    assert width[0] > width[-1]
 
 
 def test_depth_table_without_profile_has_nan_errors(tmp_path):
@@ -300,3 +357,34 @@ def test_cli_fastq_mode_with_ena_style_names(tmp_path, monkeypatch):
     scaling = dict(line.split(": ") for line in (tmp_path / "out" / "sf.txt").read_text().splitlines())
     assert float(scaling["ERR1543552"]) == pytest.approx(10 / (2000 * 1.079e-12))
     assert float(scaling["Patient_A_001"]) == pytest.approx(20 / (1000 * 1.079e-12))
+
+
+def test_cli_sylph_mode_combines_poisson_error_with_qubit_error(tmp_path, monkeypatch):
+    """End to end: Poisson CI from read counts, combined in quadrature with the Qubit error."""
+    import sys
+
+    from MGCalibrator.cli import main
+
+    fastq = tmp_path / "fastq"
+    sylph = tmp_path / "sylph"
+    fastq.mkdir()
+    sylph.mkdir()
+    (fastq / "s1_R1.fastq").write_text("@r\nACGTACGTAC\n+\nIIIIIIIIII\n" * 100)
+    write_sylphmpa(sylph / "s1.sylphmpa", "s1_R1.fastq", [("d__A|s__E coli|t__GCF_000005845.2", "0.5")])
+    (sylph / "profile.tsv").write_text(
+        PROFILE_HEADER.format(cov="True_cov") + profile_row("s1_R1.fastq", ECOLI, "0.5", "1000")
+    )
+    (tmp_path / "dna_mass.csv").write_text("sample_id,DNA_mass\ns1,10\n")
+    output = tmp_path / "out.csv"
+    monkeypatch.setattr(sys, "argv", [
+        "mgcalibrator", "--sylph_folder", str(sylph), "--sylph_profile_folder", str(sylph / "profile.tsv"),
+        "--fastq_folder", str(fastq), "--dna_mass", str(tmp_path / "dna_mass.csv"),
+        "--scaling_factors", str(tmp_path / "sf.txt"), "--output", str(output), "--qubit_error", "0.1",
+    ])
+    main()
+
+    row = pd.read_csv(output).iloc[0]
+    poisson_down, poisson_up = row.error_down / row.depth, row.error_up / row.depth
+    assert 0.03 < poisson_down < 0.09 and 0.03 < poisson_up < 0.09  # about 1.96 / sqrt(1000) = 6%
+    assert row.calibrated_error_down / row.calibrated_depth == pytest.approx(np.hypot(poisson_down, 0.1))
+    assert row.calibrated_error_up / row.calibrated_depth == pytest.approx(np.hypot(poisson_up, 0.1))
