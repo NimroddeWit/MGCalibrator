@@ -1,0 +1,78 @@
+{
+  "mgcalibrator_version": "1.1.0",
+  "timestamp_utc": "2026-11-03T15:01:48+00:00",
+  "command": "/mnt/scratch_dir/witdnt/conda/envs/mgcalibrator_env/bin/mgcalibrator --singlem_folder data/input/singlem/ --fastq_folder data/input/fastq/ --dna_mass data/input/dna_mass.csv --output data/output/output_singlem.csv --scaling_factors data/output/scaling_factors.txt",
+  "input_mode": "SingleM + FASTQ",
+  "seed": null,
+  "python": "3.10.19",
+  "platform": "Linux-4.18.0-553.155.1.el8_10.x86_64-x86_64-with-glibc2.28",
+  "packages": {
+    "numpy": "2.2.6",
+    "pandas": "2.3.3",
+    "scipy": "1.15.2",
+    "pysam": "0.23.3"
+  },
+  "parameters": {
+    "bam_folder": null,
+    "singlem_folder": "data/input/singlem/",
+    "sylph_folder": null,
+    "sylph_profile_folder": null,
+    "fastq_folder": "data/input/fastq/",
+    "extensions": [
+      ".sorted.bam",
+      ".sort.bam"
+    ],
+    "fastq_extensions": [
+      ".fastq.gz",
+      ".fq.gz",
+      ".fastq",
+      ".fq"
+    ],
+    "singlem_extensions": [
+      ".tsv",
+      ".tsv.gz"
+    ],
+    "sylphmpa_extensions": [
+      ".sylphmpa",
+      ".sylphmpa.gz"
+    ],
+    "sylph_profile_extensions": [
+      ".tsv",
+      ".tsv.gz"
+    ],
+    "suffixes": null,
+    "sample_map": null,
+    "cluster": null,
+    "bin": null,
+    "dna_mass": "data/input/dna_mass.csv",
+    "scaling_factors": "data/output/scaling_factors.txt",
+    "output": "data/output/output_singlem.csv",
+    "threads": null,
+    "skip_filtering": false,
+    "filter_percent": 97.0,
+    "depth_percent": 50.0,
+    "qubit_error": 0.0,
+    "mc_samples": 100,
+    "batch_size": 500,
+    "pseudocount": 1.0,
+    "skip_error_calculation": false,
+    "seed": null,
+    "min_depth": 0.0,
+    "overwrite_scaling_factors": false
+  },
+  "data": {
+    "n_samples": 2,
+    "n_output_rows": 6,
+    "n_rows_removed_by_min_depth": 0,
+    "n_rows_without_error_estimate": 6
+  },
+  "scaling_factors": {
+    "file": "data/output/scaling_factors.txt",
+    "overwritten": false,
+    "reused_from_file": [
+      "test_1",
+      "test_2"
+    ],
+    "calculated_in_this_run": []
+  }
+}

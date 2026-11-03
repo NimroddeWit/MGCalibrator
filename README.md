@@ -43,7 +43,7 @@ MGCalibrator performs the following steps:
 ### Sylph mode
 
 1. Reads the `.sylphmpa` files and keeps the strain-level rows (`t__...`) with their coverage.
-2. **(Optional)** Reads the `sylph profile` TSV files (run with `--estimate-read-counts`) and takes the estimated number of reads per genome. From this, a **95% confidence interval around the coverage** is calculated (`error_down` / `error_up`): the read count is simulated with a Poisson distribution and the resulting relative interval is applied to the coverage. The confidence intervals that Sylph reports itself are **not** used. The interval is combined with `--qubit_error` after the calibration.
+2. **(Optional)** Reads the `sylph profile` TSV files (run with `--estimate-read-counts`) and takes the estimated number of reads per genome. From this, a **95% confidence interval around the coverage** is calculated (`error_down` / `error_up`): the exact Poisson (Garwood) 95% interval of the read count is calculated and the resulting relative interval is applied to the coverage. The confidence intervals that Sylph reports itself are **not** used. The interval is combined with `--qubit_error` after the calibration.
 3. Links every Sylph sample to a `sample_id` of the DNA mass file.
 4. Counts the sequenced bases in the raw FASTQ file(s), **computes sample-specific scaling factors** and **calibrates the Sylph coverage values** (used as `depth`) to absolute abundances (number of copies).
 
@@ -75,7 +75,7 @@ pip install .
 * Python ≥ 3.9
 * [`samtools`](http://www.htslib.org/) (BAM mode only)
 * [`coverm`](https://github.com/wwood/CoverM) (BAM mode only)
-* Other dependencies are installed automatically (`pandas`, `numpy`, `pysam`)
+* Other dependencies are installed automatically (`pandas`, `numpy`, `scipy`, `pysam`)
 
 SingleM, Sylph and sylph-tax are not part of MGCalibrator: run them on your FASTQ files first (see [Preparing Sylph input](#-preparing-sylph-input)).
 
@@ -139,7 +139,7 @@ mgcalibrator \
 | `--cluster`                  | ❌             | BAM mode: CSV file mapping reference sequences to clusters (e.g., to stack alleles into one gene).                                   |
 | `--bin`                      | ❌             | BAM mode: CSV file mapping reference sequences to bins (e.g., to combine contigs from the same MAG).                                 |
 | `--dna_mass`                 | ✅             | CSV file containing measured DNA mass (in ng), with columns: `sample_id` and `DNA_mass`.                                             |
-| `--scaling_factors`          | ✅             | Path to a file storing precomputed scaling factors (if it exists, it will be reused, otherwise created/updated).                     |
+| `--scaling_factors`          | ✅             | Path to a file storing scaling factors. If it exists, the factors in it are reused (with a warning; the sequence files are not counted again), otherwise it is created/updated. Use `--overwrite_scaling_factors` after changing sequence files or DNA masses. |
 | `--output`                   | ✅             | Path for the output CSV containing absolute abundances (and errors).                                                                 |
 | `--threads`                  | ❌             | Number of parallel threads/CPU cores to use (default: all available).                                                                |
 | `--skip_filtering`           | ❌             | BAM mode: skip filtering based on mapping identity (assumes BAMs are already filtered).                                              |
@@ -150,6 +150,9 @@ mgcalibrator \
 | `--batch_size`               | ❌             | BAM mode: number of simulations per batch for Monte Carlo calculation (default: `500`).                                              |
 | `--pseudocount`              | ❌             | BAM mode: pseudocount for read-mapping probability at zero-depth positions (default: `1.0`).                                         |
 | `--skip_error_calculation`   | ❌             | BAM mode: skip error calculation by Monte Carlo simulation (returns only point estimates).                                           |
+| `--seed`                     | ❌             | BAM mode: random seed, to make the Monte Carlo simulations reproducible (default: not set). The results are also independent of `--threads`. |
+| `--min_depth`                | ❌             | All modes: remove references/taxa with a depth below this value before the calibration, e.g. to leave out noise at very low coverage (default: `0`, keep everything). |
+| `--overwrite_scaling_factors`| ❌             | All modes: ignore an existing `--scaling_factors` file and calculate all scaling factors again.                                      |
 | `--version`                  | ❌             | Print the version and exit.                                                                                                          |
 
 **Note:**
@@ -157,6 +160,8 @@ mgcalibrator \
 * Options that do not apply to the selected mode are ignored, with a warning.
 * The `--qubit_error` option allows you to propagate laboratory measurement error into the uncertainty analysis. It needs confidence intervals, so it is only used in BAM mode and in Sylph mode with `--sylph_profile_folder` (Sylph run with `--estimate-read-counts`). The relative error of the interval and the Qubit error are combined in quadrature: `sqrt(relative_error² + qubit_error²)`, separately for the lower and upper side.
 * In BAM mode, error estimation is performed using Monte Carlo simulations, but can be disabled with `--skip_error_calculation` if you only want point estimates.
+* **Reproducibility:** every run writes `<output>_run_info.json` next to the output file, with the command line, all parameters (including defaults and the seed), the versions of Python, numpy, pandas, scipy and pysam (and samtools/CoverM in BAM mode), and a few numbers about the data (number of samples and rows, which scaling factors were reused). Sylph and SingleM mode contain no random steps; in BAM mode, use `--seed` to get identical results.
+* **Scaling factors:** the scaling factors depend on the DNA mass and on the number of sequenced bases. If you reuse a `--scaling_factors` file, MGCalibrator warns that the factors are not recalculated, and also warns if the file contains samples that are not in the current run. Use `--overwrite_scaling_factors` (or a new file name) when the sequence files or `dna_mass.csv` have changed.
 
 
 ---
@@ -202,11 +207,18 @@ mgcalibrator \
 * **`sylph profile` TSV files** (optional, `--sylph_profile_folder`): the output of `sylph profile` that the `.sylphmpa` files were made from. They are only needed for the confidence intervals, and **only work if Sylph was run with `--estimate-read-counts`** (then the `Sequence_abundance` column holds estimated read counts instead of percentages). These can be single- or multi-sample files (one TSV with a `Sample_file` column is the usual output when profiling several samples at once). Each `.sylphmpa` strain row is linked to its row in the profile by sample name and genome accession (the same way sylph-tax links them), and the coverage values of both files are compared as a consistency check. Rows that cannot be linked have `NA` errors. If the `Sequence_abundance` of a sample looks like percentages (sums to at most 100), MGCalibrator gives a warning and no interval is calculated for that sample; if this is the case for all samples, MGCalibrator stops with an error. Files in the folder that are not `sylph profile` output are skipped with a warning.
 * Sample names are matched to the `sample_id`s like for SingleM (see below). The directory part of the Sylph sample name is ignored.
 
-**How the confidence interval is calculated.** The number of reads of a genome is Poisson distributed, and the coverage is directly proportional to the number of reads. For every genome, MGCalibrator simulates 500 Poisson draws around the estimated read count (`numpy.random.poisson`), takes the 2.5th and 97.5th percentile, and applies the ratio of these percentiles to the read count to the coverage. Example: a genome with coverage 0.5 and 1,000 reads gets a coverage interval of about 0.47–0.53; with 100,000 reads the interval is about 0.497–0.503. The interval is therefore narrow for genomes with many reads and wide for genomes with few reads.
+**How the confidence interval is calculated.** The number of reads of a genome is Poisson distributed, and the coverage is directly proportional to the number of reads. For every genome, MGCalibrator calculates the exact (Garwood) 95% confidence interval of the estimated read count `N` and applies the bounds, relative to `N`, to the coverage. Example: a genome with coverage 0.5 and 1,000 reads gets a coverage interval of about 0.47–0.53; with 100,000 reads the interval is about 0.497–0.503. The interval is narrow for genomes with many reads (about ±1.96/√N) and wide for genomes with few reads (for example, 0.21–2.9 times the coverage with 3 reads).
 
-* The interval only reflects the sampling noise of the reads. The estimated read counts themselves are rough estimates by Sylph (reads = depth × genome size / average read length).
-* Because the interval comes from a simulation, repeated runs give slightly different (but practically equal) values.
+* The interval is calculated directly (with `scipy`), not simulated, so it is deterministic. For roughly 100 reads or more it is practically identical to the percentile interval of simulated Poisson draws; with few reads it is wider and does not collapse to zero.
 * The interval is a 95% interval, like the Monte Carlo intervals in BAM mode.
+
+> ⚠️ **What the interval does and does not cover.** The interval only describes the *counting noise* of the reads. For abundant genomes it becomes very small (about 0.6% for 100,000 reads), and it should not be read as the total uncertainty of the coverage. It does not include:
+>
+> * the uncertainty of the read counts themselves: Sylph does not count reads but estimates them (reads = depth × genome size / average read length) and describes the values as rough;
+> * systematic effects in Sylph's coverage estimate, such as differences between the reference genome and the genome in your sample, the reassignment of shared k-mers, the estimated read accuracy (`--read-seq-id`), and the fact that Sylph works with a subsample of the k-mers;
+> * the uncertainty of the DNA mass and the base count, except for what you give in `--qubit_error`.
+>
+> The relative interval and `--qubit_error` are combined in quadrature, which assumes that both describe the same confidence level (the interval is a 95% interval). Define your Qubit error accordingly. If accuracy matters, validate the calibrated abundances with a mock community or spike-in with known copy numbers, or with an independent method such as ddPCR.
 
 ### 5. **Matching sample names** (all modes)
 
@@ -274,6 +286,8 @@ The first column may also be called `sylph_sample`.
 
    > ⚠️ **Always run Sylph with `--estimate-unknown` (`-u`).** Without it, Sylph reports the effective coverage (`Eff_cov`), which underestimates the true sequencing depth. With `--estimate-unknown`, Sylph reports the true coverage (`True_cov`), which is much more accurate (see the Sylph paper). MGCalibrator assumes that the coverage in the `.sylphmpa` files is the true coverage.
    >
+   > ⚠️ **Use the same `--read-seq-id` for all samples of a data set.** With `--estimate-unknown`, Sylph estimates the read accuracy for every sample separately unless you give `--read-seq-id` (for example `99` for Illumina reads). This estimate works poorly for complex metagenomes (soil, ocean) and at low sequencing depth, and it influences the coverage (`True_cov`) and therefore the calibration. A constant `--read-seq-id` makes the samples comparable.
+   >
    > ⚠️ **If you want confidence intervals, also run Sylph with `--estimate-read-counts`** (Sylph ≥ 0.9.0; this implies `--estimate-unknown`). Sylph then writes the estimated number of reads per genome to the `Sequence_abundance` column, which MGCalibrator uses to calculate the confidence interval of the coverage (see above). Without this flag, no confidence intervals (and no Qubit error propagation) are possible.
 
 2. **Add taxonomy with sylph-tax.** The `-t` option must match the databases used for Sylph; use multiple identifiers if the run used multiple databases.
@@ -304,8 +318,13 @@ The first column may also be called `sylph_sample`.
 
 The main output is a CSV with the following columns (identical in all modes):
 
-| sample | reference | depth | error_down | error_up | calibrated_depth | calibrated_error_down | calibrated_error_up |
-| ------ | --------- | ----- | ---------- | -------- | ---------------- | --------------------- | ------------------- |
+| sample | reference | depth | error_down | error_up | calibrated_depth | calibrated_error_down | calibrated_error_up | scaling_factor | read_counts | error_note |
+| ------ | --------- | ----- | ---------- | -------- | ---------------- | --------------------- | ------------------- | -------------- | ----------- | ---------- |
+
+* `scaling_factor`: the factor that was used to convert `depth` to `calibrated_depth` (the same for all rows of a sample).
+* `read_counts`: the number of reads behind the depth. BAM mode: the number of mapped reads of the reference. Sylph mode: the number of reads that Sylph estimated for the genome (with `--sylph_profile_folder`). SingleM mode: `NA`. A small count means a wide and unreliable interval.
+* `error_note`: empty if the error columns are filled; otherwise the reason why they are `NA` (or zero): `no_error_estimate_for_singlem`, `error_calculation_skipped` (`--skip_error_calculation`), `no_sylph_profile` (no `--sylph_profile_folder`), `not_in_sylph_profile` (genome or sample not found in the profile), `coverage_differs_from_sylph_profile`, `read_counts_are_percentages` (Sylph was not run with `--estimate-read-counts`), `no_read_count`.
+* The columns are the same in all modes. The new columns `scaling_factor`, `read_counts` and `error_note` are added at the end, so the position of the earlier columns is unchanged.
 
 * **BAM mode**: `reference` is the reference sequence (or cluster/bin), `depth` the mean depth with Monte Carlo errors.
 * **SingleM mode**: `reference` is the full SingleM taxonomy string of the species, `depth` is the SingleM `coverage`, and all error columns are `NA`.
@@ -360,8 +379,21 @@ Final absolute abundances (in number of copies) are derived by multiplying scale
 
 * For reproducibility, use consistent naming between BAM/FASTQ files and DNA mass table.
 * In SingleM and Sylph mode, use FASTQ files that are identical to the reads that were given to SingleM/Sylph, and use `--suffixes _1 _2` if the FASTQ folder also contains files that should not be counted (such as singleton files).
-* Reuse previously computed scaling factors (they are cached in `--scaling_factors`).
+* Scaling factors are cached in `--scaling_factors` and reused in later runs; use `--overwrite_scaling_factors` when sequence files or DNA masses have changed.
+* Use `--min_depth` to drop references/taxa with a very low coverage, where the estimates are mostly noise.
+* Use `--seed` in BAM mode for reproducible Monte Carlo intervals, and keep the `_run_info.json` file together with your results.
 * Increase `--mc_samples` for more precise confidence intervals in BAM mode (at the cost of runtime).
+
+---
+
+## 🛠️ Development
+
+```bash
+pip install -e ".[test]"
+pytest
+```
+
+The tests run automatically on GitHub (Python 3.9–3.12) for every push and pull request, see `.github/workflows/tests.yml`.
 
 ---
 
@@ -370,6 +402,7 @@ Final absolute abundances (in number of copies) are derived by multiplying scale
 | Package                 | Purpose             |
 | ----------------------- | ------------------- |
 | `pandas`, `numpy`       | Data handling       |
+| `scipy`                 | Exact Poisson confidence intervals (Sylph mode) |
 | `pysam`                 | BAM file parsing    |
 | `coverm`, `samtools`    | External tools (BAM mode only) |
 

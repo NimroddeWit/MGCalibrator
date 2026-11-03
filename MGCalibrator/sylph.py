@@ -24,10 +24,14 @@ the estimated read counts instead of percentages to the ``Sequence_abundance`` c
 Confidence interval of the coverage
 -----------------------------------
 The number of reads of a genome is Poisson distributed, and the coverage is directly
-proportional to the number of reads. The relative 95% interval that is simulated around
-the read count (``numpy.random.poisson``) is therefore also the relative interval around
-the coverage: for a coverage of 0.5 with 1,000 reads the interval is about 0.47-0.53, with
-100,000 reads about 0.497-0.503.
+proportional to the number of reads. The exact (Garwood) 95% confidence interval of a
+Poisson count N, relative to N, is therefore also the relative interval around the
+coverage: for a coverage of 0.5 with 1,000 reads the interval is about 0.47-0.53, with
+100,000 reads about 0.497-0.503. The interval is calculated with the inverse of the
+regularised incomplete gamma function (scipy), so it is deterministic and works for the
+non-integer read counts that Sylph estimates.
+
+This interval only describes the counting noise of the reads (see the README).
 
 Sample name matching is implemented in samples.py.
 """
@@ -40,16 +44,15 @@ from typing import Dict, List, Optional, Set
 
 import numpy as np
 import pandas as pd
+from scipy.special import gammaincinv
 
 SYLPHMPA_REQUIRED_COLUMNS = ["clade_name", "Coverage (if strain-level)"]
 PROFILE_REQUIRED_COLUMNS = ["Sample_file", "Genome_file", "Contig_name", "Sequence_abundance"]
 
 STRAIN_PREFIX = "t__"
 
-# Confidence interval of the coverage: percentiles of the simulated Poisson read counts
-CI_LOWER_PERCENTILE = 2.5
-CI_UPPER_PERCENTILE = 97.5
-DEFAULT_N_SIMULATIONS = 500
+# Confidence level of the interval around the coverage
+CI_CONFIDENCE = 0.95
 
 # Without --estimate-read-counts, Sequence_abundance is a percentage and sums to at most 100
 # per sample (exactly 100 without -u, the percentage of classified reads with -u).
@@ -222,7 +225,8 @@ def read_sylph_profiles(profile_files: List[str]) -> pd.DataFrame:
     pandas.DataFrame
         Columns 'sample' (Sample_file), 'candidates' (set of possible genome accessions),
         'coverage' (True_cov, or Eff_cov), 'read_counts' (estimated number of reads of the
-        genome) and 'source_file'.
+        genome), 'looks_like_percentage' (True if Sequence_abundance of the sample is not a read
+        count) and 'source_file'.
 
     Raises
     ------
@@ -283,7 +287,7 @@ def read_sylph_profiles(profile_files: List[str]) -> pd.DataFrame:
             f"so no confidence interval is calculated for them: {', '.join(percentage_samples)}. "
             "Was `sylph profile` run with --estimate-read-counts for all samples?"
         )
-    return profiles.drop(columns="looks_like_percentage")
+    return profiles
 
 
 def add_read_counts(strains: pd.DataFrame, profiles: pd.DataFrame) -> pd.DataFrame:
@@ -300,7 +304,8 @@ def add_read_counts(strains: pd.DataFrame, profiles: pd.DataFrame) -> pd.DataFra
     Returns
     -------
     pandas.DataFrame
-        'strains' with the extra column 'read_counts'.
+        'strains' with the extra columns 'read_counts' and 'error_note' (the reason why no
+        read count, and therefore no confidence interval, is available; empty if there is one).
     """
     index: Dict[tuple, List[int]] = {}
     for row_number, (sample, candidates) in enumerate(zip(profiles["sample"], profiles["candidates"])):
@@ -309,8 +314,9 @@ def add_read_counts(strains: pd.DataFrame, profiles: pd.DataFrame) -> pd.DataFra
 
     coverage = profiles["coverage"].to_numpy()
     read_counts = profiles["read_counts"].to_numpy()
+    is_percentage = profiles["looks_like_percentage"].to_numpy()
 
-    counts = []
+    counts, notes = [], []
     n_unmatched = n_inconsistent = 0
     for sample, accession, depth in zip(strains["sample"], strains["accession"], strains["depth"]):
         rows = index.get((sample, accession), [])
@@ -319,16 +325,20 @@ def add_read_counts(strains: pd.DataFrame, profiles: pd.DataFrame) -> pd.DataFra
         if not rows:
             n_unmatched += 1
             counts.append(np.nan)
+            notes.append("not_in_sylph_profile")
             continue
         row = rows[0]
         if not np.isclose(coverage[row], depth, rtol=1e-3, atol=1e-3):
             n_inconsistent += 1
             counts.append(np.nan)
+            notes.append("coverage_differs_from_sylph_profile")
             continue
         counts.append(read_counts[row])
+        notes.append("read_counts_are_percentages" if is_percentage[row] else "")
 
     result = strains.copy()
     result["read_counts"] = counts
+    result["error_note"] = notes
 
     if n_unmatched:
         logging.warning(
@@ -345,25 +355,20 @@ def add_read_counts(strains: pd.DataFrame, profiles: pd.DataFrame) -> pd.DataFra
     return result
 
 
-def poisson_coverage_ci(
-    coverage,
-    read_counts,
-    n_simulations: int = DEFAULT_N_SIMULATIONS,
-    rng: Optional[np.random.Generator] = None,
-    batch_size: int = 5000,
-):
+def poisson_coverage_ci(coverage, read_counts, confidence: float = CI_CONFIDENCE):
     """
-    95% confidence interval around the coverage, derived from the Poisson noise of the read count.
+    Confidence interval around the coverage, derived from the Poisson noise of the read count.
 
-    The number of reads is simulated `n_simulations` times from a Poisson distribution with
-    the estimated read count as mean. The 2.5th and 97.5th percentile of the simulated
-    counts, relative to the estimated count, are applied to the coverage (the coverage is
-    proportional to the number of reads). Because this interval only depends on the number
-    of reads, it is small for genomes with many reads and wide for genomes with few reads.
+    The exact (Garwood) confidence interval of a Poisson count N is
+    [Gamma(N; 1).ppf(a/2), Gamma(N + 1; 1).ppf(1 - a/2)] with a = 1 - confidence (equal to the
+    chi-square form chi2.ppf(a/2, 2N) / 2 and chi2.ppf(1 - a/2, 2N + 2) / 2). Because the coverage is
+    proportional to the number of reads, the bounds relative to N are applied to the coverage.
+    The interval is narrow for genomes with many reads (about 1.96 / sqrt(N) on each side) and
+    wide for genomes with few reads. It is also valid for non-integer (estimated) read counts.
 
-    The interval is returned on the scale of the coverage, before any Qubit error is
-    added: the caller turns it into relative errors and combines these with the Qubit
-    error (see cli.py). The interval always contains the coverage itself.
+    The interval is returned on the scale of the coverage, before any Qubit error is added: the
+    caller turns it into relative errors and combines these with the Qubit error (see cli.py).
+    The interval always contains the coverage itself.
 
     Parameters
     ----------
@@ -371,12 +376,8 @@ def poisson_coverage_ci(
         Coverage (depth) of every genome.
     read_counts : array-like
         Estimated number of reads of every genome (same length as `coverage`).
-    n_simulations : int
-        Number of Poisson draws per genome.
-    rng : numpy.random.Generator, optional
-        Random number generator (pass a seeded one for reproducible results).
-    batch_size : int
-        Number of genomes simulated at once (limits memory use).
+    confidence : float
+        Confidence level of the interval (default 0.95).
 
     Returns
     -------
@@ -388,45 +389,39 @@ def poisson_coverage_ci(
     read_counts = np.asarray(read_counts, dtype=float)
     if coverage.shape != read_counts.shape:
         raise ValueError("coverage and read_counts must have the same length.")
-    if n_simulations < 1:
-        raise ValueError("n_simulations must be at least 1.")
-    rng = np.random.default_rng() if rng is None else rng
+    if not 0 < confidence < 1:
+        raise ValueError("confidence must be between 0 and 1.")
+    alpha = 1.0 - confidence
 
     lower = np.full(coverage.shape, np.nan)
     upper = np.full(coverage.shape, np.nan)
-    valid = np.flatnonzero(
-        np.isfinite(coverage) & np.isfinite(read_counts) & (read_counts > 0) & (coverage >= 0)
-    )
-    for start in range(0, valid.size, batch_size):
-        rows = valid[start:start + batch_size]
-        expected = read_counts[rows]
-        simulated = rng.poisson(expected[:, None], size=(rows.size, n_simulations))
-        q_low, q_high = np.percentile(simulated, [CI_LOWER_PERCENTILE, CI_UPPER_PERCENTILE], axis=1)
-        lower[rows] = coverage[rows] * q_low / expected
-        upper[rows] = coverage[rows] * q_high / expected
+    valid = np.isfinite(coverage) & np.isfinite(read_counts) & (read_counts > 0) & (coverage >= 0)
+    counts = read_counts[valid]
+    ratio_low = gammaincinv(counts, alpha / 2) / counts
+    ratio_high = gammaincinv(counts + 1, 1 - alpha / 2) / counts
+    lower[valid] = coverage[valid] * ratio_low
+    upper[valid] = coverage[valid] * ratio_high
 
-    # Guard against simulation noise for very small read counts
+    # Guard against floating point error for extremely large read counts
     return np.minimum(lower, coverage), np.maximum(upper, coverage)
 
 
-def add_poisson_confidence_intervals(
-    strains: pd.DataFrame,
-    n_simulations: int = DEFAULT_N_SIMULATIONS,
-    rng: Optional[np.random.Generator] = None,
-) -> pd.DataFrame:
+def add_poisson_confidence_intervals(strains: pd.DataFrame) -> pd.DataFrame:
     """
     Add the confidence interval of the coverage ('lower_ci' and 'upper_ci') to the
     strain-level rows, calculated from their 'read_counts' (see add_read_counts and
-    poisson_coverage_ci). Rows without read count get NaN.
+    poisson_coverage_ci). Rows without a usable read count get NaN, and a reason in 'error_note'.
     """
     result = strains.copy()
-    result["lower_ci"], result["upper_ci"] = poisson_coverage_ci(
-        result["depth"], result["read_counts"], n_simulations=n_simulations, rng=rng
-    )
-    n_with_ci = int(result["lower_ci"].notna().sum())
+    result["lower_ci"], result["upper_ci"] = poisson_coverage_ci(result["depth"], result["read_counts"])
+    no_interval = result["lower_ci"].isna()
+    if "error_note" not in result:
+        result["error_note"] = ""
+    result.loc[no_interval & (result["error_note"] == ""), "error_note"] = "no_read_count"
     logging.info(
-        f"Calculated Poisson confidence intervals for {n_with_ci} of {len(result)} strain-level rows "
-        f"({n_simulations} simulations per row). Rows without an estimated read count have no interval."
+        f"Calculated {int(CI_CONFIDENCE * 100)}% Poisson confidence intervals for "
+        f"{int((~no_interval).sum())} of {len(result)} strain-level rows. "
+        "Rows without an estimated read count have no interval."
     )
     return result
 
@@ -439,19 +434,23 @@ def sylph_to_depth_table(strains: pd.DataFrame, sample_map: Dict[str, str]) -> p
     Convert strain-level Sylph rows into the depth table used by MGCalibrator.
 
     The Sylph sample names are replaced by the MGCalibrator sample names. 'reference' is the
-    full taxonomic string, 'depth' the coverage, and 'lower_ci' / 'upper_ci' the confidence
-    interval (NaN if no profile was supplied or no interval is available).
+    full taxonomic string, 'depth' the coverage, 'lower_ci' / 'upper_ci' the confidence
+    interval (NaN if no profile was supplied or no interval is available), 'read_counts' the
+    estimated number of reads and 'error_note' the reason why there is no interval.
 
     Returns
     -------
     pandas.DataFrame
-        Columns 'sample', 'reference', 'depth', 'lower_ci' and 'upper_ci'.
+        Columns 'sample', 'reference', 'depth', 'lower_ci', 'upper_ci', 'read_counts' and 'error_note'.
     """
+    has_profile = "lower_ci" in strains
     table = pd.DataFrame({
         "sample": strains["sample"].map(sample_map),
         "reference": strains["reference"],
         "depth": strains["depth"],
-        "lower_ci": strains["lower_ci"] if "lower_ci" in strains else np.nan,
-        "upper_ci": strains["upper_ci"] if "upper_ci" in strains else np.nan,
+        "lower_ci": strains["lower_ci"] if has_profile else np.nan,
+        "upper_ci": strains["upper_ci"] if has_profile else np.nan,
+        "read_counts": strains["read_counts"] if "read_counts" in strains else np.nan,
+        "error_note": strains["error_note"] if "error_note" in strains else "no_sylph_profile",
     })
     return table.reset_index(drop=True)

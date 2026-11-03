@@ -136,9 +136,12 @@ def test_sylph_confidence_intervals_are_not_used(tmp_path):
     p = tmp_path / "profile.tsv"
     p.write_text(PROFILE_HEADER.format(cov="True_cov") + profile_row("s1_x.fq.gz", ECOLI, "0.412", "1000000"))
     strains = add_read_counts(make_strains(tmp_path), read_sylph_profiles([str(p)]))
-    result = add_poisson_confidence_intervals(strains, rng=np.random.default_rng(1))
-    assert result.loc[0, "lower_ci"] == pytest.approx(0.412 * 0.998, abs=0.002)
-    assert result.loc[0, "upper_ci"] == pytest.approx(0.412 * 1.002, abs=0.002)
+    result = add_poisson_confidence_intervals(strains)
+    assert result.loc[0, "lower_ci"] == pytest.approx(0.412 * 0.9980, abs=0.0005)
+    assert result.loc[0, "upper_ci"] == pytest.approx(0.412 * 1.0020, abs=0.0005)
+    assert result.loc[0, "error_note"] == ""
+    # The second genome is not in the profile: no interval, with the reason
+    assert np.isnan(result.loc[1, "lower_ci"]) and result.loc[1, "error_note"] == "not_in_sylph_profile"
 
 
 def test_inconsistent_coverage_gives_no_read_counts(tmp_path):
@@ -191,29 +194,38 @@ def test_non_profile_tsv_is_skipped(tmp_path):
 
 
 def test_poisson_ci_matches_the_documented_examples():
-    rng = np.random.default_rng(42)
     # Same coverage, 1,000 vs 100,000 reads: relative interval about +-6% vs +-0.6%
-    lower, upper = poisson_coverage_ci([0.5, 0.5], [1000, 100000], n_simulations=2000, rng=rng)
+    lower, upper = poisson_coverage_ci([0.5, 0.5], [1000, 100000])
     assert (lower[0], upper[0]) == pytest.approx((0.47, 0.53), abs=0.005)
     assert (lower[1], upper[1]) == pytest.approx((0.497, 0.503), abs=0.001)
+
+
+def test_poisson_ci_is_the_exact_garwood_interval():
+    from scipy.stats import chi2
+
+    reads = np.array([1.0, 3.0, 20.0, 1000.0, 123456.0, 12.5])  # also non-integer (estimated) counts
+    lower, upper = poisson_coverage_ci(np.ones_like(reads), reads)
+    np.testing.assert_allclose(lower, chi2.ppf(0.025, 2 * reads) / 2 / reads, rtol=1e-9)
+    np.testing.assert_allclose(upper, chi2.ppf(0.975, 2 * reads + 2) / 2 / reads, rtol=1e-9)
+    # Few reads: wide and asymmetric interval, but never below zero
+    assert lower[1] == pytest.approx(0.2062, abs=1e-3) and upper[1] == pytest.approx(2.9224, abs=1e-3)
 
 
 def test_poisson_ci_contains_coverage_and_handles_missing_values():
     coverage = [0.5, 0.5, 0.5, np.nan, 0.5]
     reads = [3, 0, np.nan, 100, -5]
-    lower, upper = poisson_coverage_ci(coverage, reads, rng=np.random.default_rng(0))
+    lower, upper = poisson_coverage_ci(coverage, reads)
     assert lower[0] <= 0.5 <= upper[0]
     assert np.isnan(lower[1:]).all() and np.isnan(upper[1:]).all()
 
 
-def test_poisson_ci_is_reproducible_with_seed_and_batched():
+def test_poisson_ci_is_deterministic_and_narrows_with_more_reads():
     coverage, reads = np.full(25, 1.0), np.linspace(10, 5000, 25)
-    a = poisson_coverage_ci(coverage, reads, rng=np.random.default_rng(7), batch_size=4)
-    b = poisson_coverage_ci(coverage, reads, rng=np.random.default_rng(7), batch_size=4)
+    a = poisson_coverage_ci(coverage, reads)
+    b = poisson_coverage_ci(coverage, reads)
     np.testing.assert_array_equal(a[0], b[0])
-    # More reads -> narrower interval
     width = a[1] - a[0]
-    assert width[0] > width[-1]
+    assert (np.diff(width) < 0).all()  # more reads -> narrower interval
 
 
 def test_depth_table_without_profile_has_nan_errors(tmp_path):
@@ -384,7 +396,145 @@ def test_cli_sylph_mode_combines_poisson_error_with_qubit_error(tmp_path, monkey
     main()
 
     row = pd.read_csv(output).iloc[0]
+    assert row.read_counts == 1000 and row.error_note != row.error_note  # no note: NaN after reading the CSV
     poisson_down, poisson_up = row.error_down / row.depth, row.error_up / row.depth
     assert 0.03 < poisson_down < 0.09 and 0.03 < poisson_up < 0.09  # about 1.96 / sqrt(1000) = 6%
     assert row.calibrated_error_down / row.calibrated_depth == pytest.approx(np.hypot(poisson_down, 0.1))
     assert row.calibrated_error_up / row.calibrated_depth == pytest.approx(np.hypot(poisson_up, 0.1))
+
+
+# ----------------------------------------------------------------------
+# Reproducibility, output columns, --min_depth, scaling factor file, run info
+# ----------------------------------------------------------------------
+def test_make_rng_is_reproducible_and_independent_of_processing_order():
+    from MGCalibrator.processor import make_rng
+
+    assert make_rng(5, "s1").integers(1 << 30) == make_rng(5, "s1").integers(1 << 30)
+    assert make_rng(5, "s1").integers(1 << 30) != make_rng(5, "s2").integers(1 << 30)
+    assert make_rng(5, "s1").integers(1 << 30) != make_rng(6, "s1").integers(1 << 30)
+
+
+def test_monte_carlo_depth_is_reproducible_with_seed():
+    from MGCalibrator.processor import MC_simulation_for_depth, make_rng
+
+    depths = np.full(1000, 5, dtype=np.int32)
+    reads = np.array([[i * 10, 100] for i in range(50)])
+    first = MC_simulation_for_depth(depths, reads, n_simulations=20, rng=make_rng(3, "s1"))
+    second = MC_simulation_for_depth(depths, reads, n_simulations=20, rng=make_rng(3, "s1"))
+    assert first == second
+
+
+def test_apply_min_depth():
+    from MGCalibrator.cli import apply_min_depth
+
+    depths = pd.DataFrame({"depth": [0.01, 0.5, 2.0]})
+    assert apply_min_depth(depths, 0)[1] == 0
+    kept, n_removed = apply_min_depth(depths, 0.1)
+    assert list(kept["depth"]) == [0.5, 2.0] and n_removed == 1
+    with pytest.raises(ValueError, match="No rows left"):
+        apply_min_depth(depths, 10)
+
+
+def test_scaling_factors_file_is_reused_with_warning_and_can_be_overwritten(tmp_path, caplog):
+    from MGCalibrator.processor import calculate_scaling_factors
+
+    fastq = tmp_path / "s1.fastq"
+    fastq.write_text("@r\nACGTACGTAC\n+\nIIIIIIIIII\n" * 100)  # 1000 bases
+    factors_file = tmp_path / "sf.txt"
+    factors_file.write_text("s1: 123.0\nold_sample: 5.0\n")
+    kwargs = dict(samples={"s1"}, sample_by_bam=None, initial_dna_mass={"s1": 10.0},
+                  scaling_factors_file=str(factors_file), fastq_files_by_sample={"s1": [str(fastq)]})
+
+    factors, reused = calculate_scaling_factors(**kwargs)
+    assert factors["s1"] == 123.0 and reused == ["s1"]
+    assert "--overwrite_scaling_factors" in caplog.text and "old_sample" in caplog.text
+
+    factors, reused = calculate_scaling_factors(**kwargs, overwrite=True)
+    assert reused == [] and factors["s1"] == pytest.approx(10.0 / (1000 * 1.079e-12))
+    assert "old_sample" not in factors_file.read_text()
+
+
+def run_cli(monkeypatch, *arguments):
+    import sys
+
+    from MGCalibrator.cli import main
+
+    monkeypatch.setattr(sys, "argv", ["mgcalibrator", *map(str, arguments)])
+    main()
+
+
+def make_singlem_dataset(tmp_path):
+    import gzip
+
+    fastq, singlem = tmp_path / "fastq", tmp_path / "singlem"
+    fastq.mkdir()
+    singlem.mkdir()
+    with gzip.open(fastq / "S1_1.fastq.gz", "wt") as handle:
+        handle.write("@r\nACGTACGTAC\n+\nIIIIIIIIII\n" * 100)
+    (singlem / "profile.tsv").write_text(
+        "sample\tcoverage\ttaxonomy\n"
+        "S1_1\t2.0\tRoot; d__Bacteria; g__Escherichia; s__Escherichia coli\n"
+        "S1_1\t0.01\tRoot; d__Bacteria; g__Bacillus; s__Bacillus subtilis\n"
+    )
+    (tmp_path / "dna_mass.csv").write_text("sample_id,DNA_mass\nS1,10\n")
+    return fastq, singlem
+
+
+def test_cli_output_columns_error_note_min_depth_and_run_info(tmp_path, monkeypatch):
+    import json
+
+    fastq, singlem = make_singlem_dataset(tmp_path)
+    output = tmp_path / "out" / "result.csv"
+    common = ["--singlem_folder", singlem, "--fastq_folder", fastq, "--dna_mass", tmp_path / "dna_mass.csv",
+              "--scaling_factors", tmp_path / "out" / "sf.txt", "--output", output]
+    run_cli(monkeypatch, *common, "--min_depth", "0.1")
+
+    result = pd.read_csv(output)
+    assert list(result.columns) == [
+        "sample", "reference", "depth", "error_down", "error_up", "calibrated_depth",
+        "calibrated_error_down", "calibrated_error_up", "scaling_factor", "read_counts", "error_note",
+    ]
+    assert len(result) == 1  # the row with depth 0.01 is removed
+    assert result.loc[0, "scaling_factor"] == pytest.approx(10 / (1000 * 1.079e-12))
+    assert result.loc[0, "error_note"] == "no_error_estimate_for_singlem"
+
+    info = json.loads((tmp_path / "out" / "result_run_info.json").read_text())
+    assert info["input_mode"] == "SingleM + FASTQ"
+    assert info["parameters"]["min_depth"] == 0.1 and info["seed"] is None
+    assert info["data"]["n_rows_removed_by_min_depth"] == 1
+    assert info["scaling_factors"]["calculated_in_this_run"] == ["S1"]
+    assert {"numpy", "pandas", "scipy", "pysam"} <= set(info["packages"])
+
+    # Second run: the scaling factor is now taken from the file
+    run_cli(monkeypatch, *common)
+    info = json.loads((tmp_path / "out" / "result_run_info.json").read_text())
+    assert info["scaling_factors"]["reused_from_file"] == ["S1"]
+
+
+def test_cli_sylph_error_note_without_profile(tmp_path, monkeypatch):
+    fastq = tmp_path / "fastq"
+    sylph = tmp_path / "sylph"
+    fastq.mkdir()
+    sylph.mkdir()
+    (fastq / "s1_R1.fastq").write_text("@r\nACGTACGTAC\n+\nIIIIIIIIII\n" * 100)
+    write_sylphmpa(sylph / "s1.sylphmpa", "s1_R1.fastq", [("d__A|s__E coli|t__GCF_000005845.2", "0.5")])
+    (tmp_path / "dna_mass.csv").write_text("sample_id,DNA_mass\ns1,10\n")
+    output = tmp_path / "out.csv"
+    run_cli(monkeypatch, "--sylph_folder", sylph, "--fastq_folder", fastq, "--dna_mass", tmp_path / "dna_mass.csv",
+            "--scaling_factors", tmp_path / "sf.txt", "--output", output)
+    result = pd.read_csv(output)
+    assert result.loc[0, "error_note"] == "no_sylph_profile"
+    assert pd.isna(result.loc[0, "read_counts"]) or result.loc[0, "read_counts"] == "NA"
+
+
+def test_tool_version_handles_non_utf8_output_and_missing_tools(tmp_path):
+    import os
+    import stat
+
+    from MGCalibrator.runinfo import _tool_version
+
+    tool = tmp_path / "faketool"
+    tool.write_bytes(b"#!/bin/sh\nprintf 'faketool 1.2 \\xa9 copyright\\\\n'\n")
+    tool.chmod(tool.stat().st_mode | stat.S_IEXEC)
+    assert _tool_version(str(tool)).startswith("faketool 1.2")
+    assert _tool_version(str(tmp_path / "does_not_exist")) is None

@@ -1,0 +1,54 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install MGCalibrator and the test requirements
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]"
+
+      - name: Unit tests
+        run: pytest -q tests
+
+      - name: Command line smoke tests
+        run: |
+          mgcalibrator --version
+          mgcalibrator --help > /dev/null
+
+      - name: Example run, SingleM mode (needs no external tools)
+        run: |
+          mgcalibrator \
+            --singlem_folder data/input/singlem/ \
+            --fastq_folder data/input/fastq/ \
+            --dna_mass data/input/dna_mass.csv \
+            --output "$RUNNER_TEMP/singlem.csv" \
+            --scaling_factors "$RUNNER_TEMP/singlem_sf.txt"
+
+      - name: Example run, Sylph mode with confidence intervals
+        run: |
+          mgcalibrator \
+            --sylph_folder data/input/sylph/gtdb data/input/sylph/virus \
+            --sylph_profile_folder data/input/sylph_profiles/ \
+            --fastq_folder data/input/fastq/ \
+            --dna_mass data/input/dna_mass.csv \
+            --qubit_error 0.1 \
+            --output "$RUNNER_TEMP/sylph.csv" \
+            --scaling_factors "$RUNNER_TEMP/sylph_sf.txt"

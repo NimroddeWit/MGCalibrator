@@ -5,10 +5,13 @@ Functions for processing BAM files, computing depths, clustering, binning,
 Monte Carlo simulations, and calculating scaling factors (from BAM or FASTQ files).
 """
 
+from __future__ import annotations  # allows `str | None` annotations on Python 3.9
+
 # Standard library imports
 import logging
 import os
 import subprocess
+import zlib
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 from typing import Dict, List, Optional, Tuple
 
@@ -435,6 +438,7 @@ def MC_simulation_for_depth(
     n_simulations: int = 1000,
     pseudocount: int = 1,
     batch_size: int = 500,
+    rng: Optional[np.random.Generator] = None,
 ) -> tuple[float, float, float]:
     """
     Monte Carlo simulation to estimate raw depth (mean of 98% of inner values) from read coverage.
@@ -453,14 +457,17 @@ def MC_simulation_for_depth(
         Small constant added for sampling probabilities, by default 1.
     batch_size : int, optional
         Number of simulations to process in a batch, by default 500.
+    rng : numpy.random.Generator, optional
+        Random number generator. Pass a seeded generator for reproducible results.
 
     Returns
     -------
     tuple[float, float, float]
         (mean raw, lower 2.5% CI, upper 97.5% CI)
     """
+    rng = np.random.default_rng() if rng is None else rng
     n_mapped_reads = reads.shape[0]
-    sim_total_reads = np.random.poisson(n_mapped_reads, n_simulations)
+    sim_total_reads = rng.poisson(n_mapped_reads, n_simulations)
     reads_per_sim = sim_total_reads - n_mapped_reads
 
     depth_list = []
@@ -486,7 +493,7 @@ def MC_simulation_for_depth(
             if n < 0:
                 # Remove random reads
                 n_reads = min(n_reads, reads.shape[0])
-                indices_to_remove = np.random.choice(reads.shape[0], size=n_reads, replace=False)
+                indices_to_remove = rng.choice(reads.shape[0], size=n_reads, replace=False)
                 remove_starts = reads[indices_to_remove, 0]
                 remove_lengths = reads[indices_to_remove, 1]
                 for start, length in zip(remove_starts, remove_lengths):
@@ -501,12 +508,12 @@ def MC_simulation_for_depth(
                     np.add.at(probs, reads[:, 0], 1)
                     probs = probs[:-151]
                     probs /= probs.sum()
-                    positions_to_add = np.random.choice(valid_indices, size=n_reads, p=probs, replace=True)
+                    positions_to_add = rng.choice(valid_indices, size=n_reads, p=probs, replace=True)
                 else:
                     positions_to_add = np.zeros(n_reads, dtype=int)
 
                 read_lengths = reads[:, 1]
-                lengths_to_add = np.random.choice(read_lengths, size=n_reads, replace=n_reads > len(read_lengths))
+                lengths_to_add = rng.choice(read_lengths, size=n_reads, replace=n_reads > len(read_lengths))
                 for pos, length in zip(positions_to_add, lengths_to_add):
                     sim_depths[pos:pos+length] += 1
 
@@ -518,6 +525,19 @@ def MC_simulation_for_depth(
 
     return depth, lower_ci, upper_ci
 
+def make_rng(seed: int | None, name: str) -> np.random.Generator:
+    """
+    Random number generator for one sample.
+
+    With a seed, the stream is derived from the seed and the sample name (CRC32, which is stable
+    across runs and platforms), so parallel processing does not influence the results. Without a
+    seed, every call gets fresh entropy from the operating system.
+    """
+    if seed is None:
+        return np.random.default_rng()
+    return np.random.default_rng(np.random.SeedSequence(entropy=seed, spawn_key=(zlib.crc32(name.encode()),)))
+
+
 def process_bam_file(
     bam_file: str,
     sample_name: str,
@@ -527,7 +547,8 @@ def process_bam_file(
     skip_error_calculation: bool,
     n_simulations: int,
     pseudocount: int,
-    batch_size: int
+    batch_size: int,
+    seed: int | None = None,
 ) -> list[dict]:
     """
     Process a BAM file: generate reads and depth dictionaries,
@@ -554,12 +575,18 @@ def process_bam_file(
         Pseudocount added for probability calculations.
     batch_size : int
         Number of simulations per batch.
+    seed : int | None
+        Seed for the Monte Carlo simulations. The random stream of every BAM file is derived
+        from the seed and the sample name, so the results do not depend on the order in
+        which the (parallel) BAM files are processed. None: not reproducible.
 
     Returns
     -------
     list[dict]
-        List of dictionaries with raw results per reference.
+        List of dictionaries with raw results per reference ('read_counts' is the number of
+        mapped reads of the reference).
     """
+    rng = make_rng(seed, sample_name)
     logging.info(f"Creating reads_dict and depth_dict for {sample_name}...")
     depth_dict = get_depth_dict_with_samtools(bam_file)
     reads_dict = get_reads_dict_from_bam(bam_file)
@@ -594,12 +621,15 @@ def process_bam_file(
                 depth_percent=depth_percent,
                 n_simulations=n_simulations,
                 pseudocount=pseudocount,
-                batch_size=batch_size
+                batch_size=batch_size,
+                rng=rng,
             )
+            error_note = ""
         else:
             depth = get_mean_central_depth(depth_dict[ref], depth_percent)
             lower_ci = depth
             upper_ci = depth
+            error_note = "error_calculation_skipped"
 
         result_rows.append({
             "sample": sample_name,
@@ -607,6 +637,8 @@ def process_bam_file(
             "depth": depth,
             "lower_ci": lower_ci,
             "upper_ci": upper_ci,
+            "read_counts": reads_array.shape[0],
+            "error_note": error_note,
         })
     logging.info(f"Depth calculations for {sample_name} done.")
     return result_rows
@@ -621,7 +653,8 @@ def compute_depths_with_error(
     n_simulations: int = 100,
     pseudocount: int = 1,
     batch_size: int = 500,
-    n_jobs: int = 4
+    n_jobs: int = 4,
+    seed: Optional[int] = None,
 ) -> pd.DataFrame:
     """
     Compute raw depths with Monte Carlo error simulations for a list of filtered BAM files.
@@ -648,11 +681,14 @@ def compute_depths_with_error(
         Number of simulations per batch.
     n_jobs : int
         Number of parallel processes to use.
+    seed : Optional[int]
+        Seed for reproducible Monte Carlo simulations (see process_bam_file).
 
     Returns
     -------
     pd.DataFrame
-        DataFrame with raw depths and Monte Carlo statistics per reference per sample.
+        DataFrame with raw depths and Monte Carlo statistics per reference per sample
+        (columns sample, reference, depth, lower_ci, upper_ci, read_counts, error_note).
     """
     result_rows = []
 
@@ -668,7 +704,8 @@ def compute_depths_with_error(
                 skip_error_calculation,
                 n_simulations,
                 pseudocount,
-                batch_size
+                batch_size,
+                seed,
             )
             for bam_file in bam_files_filtered
         ]
@@ -685,13 +722,16 @@ def calculate_scaling_factors(
     scaling_factors_file,
     n_workers=None,
     fastq_files_by_sample=None,
+    overwrite=False,
 ):
     """
     Calculate scaling factors for each sample based on the sequenced bases and the
     initial DNA mass. The sequenced bases are counted either in BAM files or in
     the raw FASTQ files (exactly one of the two must be provided).
-    If a scaling factors file exists, it is loaded. Otherwise, scaling factors are computed
-    and saved to the file.
+    If a scaling factors file exists, the factors in it are reused (with a warning, because
+    they are not recalculated when the sequence files or DNA masses have changed) and only
+    the missing samples are computed. Otherwise, scaling factors are computed and saved to
+    the file. With `overwrite`, an existing file is ignored and replaced.
 
     Args:
         samples (iterable): Sample names to calculate scaling factors for.
@@ -702,9 +742,11 @@ def calculate_scaling_factors(
         fastq_files_by_sample (dict[str, list[str]], optional): FASTQ file paths per
             sample (SingleM mode; 1 file for Nanopore reads, 2 files for paired-end
             Illumina reads).
+        overwrite (bool): Ignore an existing scaling factors file and recalculate all factors.
 
     Returns:
-        dict: Scaling factors keyed by sample name.
+        tuple: (dict of scaling factors keyed by sample name, sorted list of the samples whose
+        scaling factor was taken from an existing file).
     """
     if bool(sample_by_bam) == bool(fastq_files_by_sample):
         raise ValueError("Provide either BAM files or FASTQ files to calculate scaling factors, not both.")
@@ -713,13 +755,31 @@ def calculate_scaling_factors(
 
     # Load existing scaling factors if file exists
     if os.path.exists(scaling_factors_file):
-        with open(scaling_factors_file, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if not line or ':' not in line:
-                    continue
-                sample, factor = line.split(':', 1)
-                scaling_factors[sample.strip()] = float(factor.strip())
+        if overwrite:
+            logging.info(f"Existing scaling factors file '{scaling_factors_file}' is overwritten.")
+        else:
+            with open(scaling_factors_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or ':' not in line:
+                        continue
+                    sample, factor = line.split(':', 1)
+                    scaling_factors[sample.strip()] = float(factor.strip())
+
+    reused_samples = sorted(set(samples) & scaling_factors.keys())
+    if reused_samples:
+        logging.warning(
+            f"Reusing the scaling factors of {len(reused_samples)} sample(s) from the existing file "
+            f"'{scaling_factors_file}'; they are not recalculated. If the sequence files or the DNA masses "
+            "of these samples have changed since that file was made, use --overwrite_scaling_factors."
+        )
+    other_samples = sorted(scaling_factors.keys() - set(samples))
+    if other_samples:
+        logging.warning(
+            f"The existing scaling factors file contains {len(other_samples)} sample(s) that are not in this "
+            f"run ({', '.join(other_samples[:5])}{', ...' if len(other_samples) > 5 else ''}). "
+            "Check that the file belongs to this data set; use --overwrite_scaling_factors to start a new file."
+        )
 
     # Check if all samples are covered
     missing_samples = set(samples) - scaling_factors.keys()
@@ -767,4 +827,4 @@ def calculate_scaling_factors(
     else:
         logging.info("All necessary scaling factors loaded from file.")
 
-    return scaling_factors
+    return scaling_factors, reused_samples

@@ -21,6 +21,7 @@ import argparse
 import logging
 import os
 import subprocess
+from typing import Tuple
 
 import numpy as np
 import pandas as pd
@@ -41,6 +42,7 @@ from .processor import (
     compute_depths_with_error,
     calculate_scaling_factors,
 )
+from .runinfo import write_run_info
 from .samples import (
     assign_files_to_samples,
     build_sample_map,
@@ -57,6 +59,23 @@ from .sylph import (
     read_sylphmpa_files,
     sylph_to_depth_table,
 )
+
+def apply_min_depth(depths: pd.DataFrame, min_depth: float) -> Tuple[pd.DataFrame, int]:
+    """
+    Remove the rows with a depth below `min_depth` (0 keeps everything).
+
+    Returns the remaining rows and the number of removed rows. Raises a ValueError if no row is left.
+    """
+    if min_depth <= 0:
+        return depths, 0
+    keep = ~(depths["depth"] < min_depth)
+    n_removed = int((~keep).sum())
+    if n_removed:
+        logging.info(f"Removed {n_removed} of {len(depths)} rows with a depth below --min_depth {min_depth}.")
+    if not keep.any():
+        raise ValueError(f"No rows left: all depths are below --min_depth {min_depth}.")
+    return depths[keep].reset_index(drop=True), n_removed
+
 
 # ----------------------------------------------------------------------
 # Startup Banner Function
@@ -158,9 +177,9 @@ def main() -> None:
             "Sylph mode (optional): one or more folders (or files) with the `sylph profile` output\n"
             "TSV files that the .sylphmpa files were made from (single- or multi-sample TSVs).\n"
             "Used to calculate confidence intervals around the coverage (error_down and error_up):\n"
-            "the estimated number of reads per genome (column Sequence_abundance) is simulated\n"
-            "with a Poisson distribution and the resulting relative 95% interval is applied to\n"
-            "the coverage. Requires `sylph profile --estimate-read-counts` (Sylph >= 0.9.0).\n"
+            "the exact Poisson 95% interval of the estimated number of reads per genome (column\n"
+            "Sequence_abundance) is applied to the coverage. Requires `sylph profile\n"
+            "--estimate-read-counts` (Sylph >= 0.9.0).\n"
             "The confidence intervals that Sylph reports itself are not used."
         ),
     )
@@ -303,8 +322,36 @@ def main() -> None:
         action="store_true",
         help="Skip error calculation by Monte Carlo simulation.",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help=(
+            "BAM mode: random seed to make the Monte Carlo simulations reproducible (default: not set, so\n"
+            "the intervals differ slightly between runs). The seed is saved in the run info file."
+        ),
+    )
+    parser.add_argument(
+        "--min_depth",
+        type=float,
+        default=0.0,
+        help=(
+            "Remove references/taxa with a depth below this value before the calibration, e.g. to leave out\n"
+            "noise at very low coverage (default: 0, keep everything)."
+        ),
+    )
+    parser.add_argument(
+        "--overwrite_scaling_factors",
+        action="store_true",
+        help=(
+            "Ignore an existing --scaling_factors file and calculate all scaling factors again. Without this\n"
+            "option, the factors in an existing file are reused (the sequence files are not counted again)."
+        ),
+    )
 
     args = parser.parse_args()
+    if args.min_depth < 0:
+        parser.error("--min_depth cannot be negative.")
 
     # ----------------------
     # Determine input mode
@@ -354,7 +401,7 @@ def main() -> None:
     # Warn about options that have no effect in the selected mode
     calculation_options = [
         "extensions", "cluster", "bin", "skip_filtering", "filter_percent", "depth_percent",
-        "mc_samples", "batch_size", "pseudocount", "skip_error_calculation",
+        "mc_samples", "batch_size", "pseudocount", "skip_error_calculation", "seed",
     ]
     if bam_mode:
         mode_specific_options = [
@@ -482,18 +529,21 @@ def main() -> None:
             pseudocount=args.pseudocount,
             batch_size=args.batch_size,
             n_jobs=args.threads,
+            seed=args.seed,
         )
+        calculated_depths, n_removed_min_depth = apply_min_depth(calculated_depths, args.min_depth)
 
         # ----------------------
         # Compute scaling factors
         # ----------------------
         samples = set(calculated_depths["sample"])
-        scaling_factors = calculate_scaling_factors(
+        scaling_factors, reused_scaling_factors = calculate_scaling_factors(
             samples=samples,
             sample_by_bam=sample_by_bam,
             initial_dna_mass=initial_dna_mass,
             scaling_factors_file=scaling_factors_file,
             n_workers=args.threads,
+            overwrite=args.overwrite_scaling_factors,
         )
 
     else:
@@ -559,6 +609,8 @@ def main() -> None:
             calculated_depths = singlem_to_depth_table(singlem_df, sample_map).assign(
                 lower_ci=np.nan,
                 upper_ci=np.nan,
+                read_counts=np.nan,
+                error_note="no_error_estimate_for_singlem",
             )
 
         else:
@@ -585,7 +637,7 @@ def main() -> None:
                         f"{' '.join(args.sylph_profile_folder)} with the specified extensions."
                     )
                 logging.info(f"Found {len(profile_files)} Sylph profile files.")
-                # Confidence intervals: Poisson simulation on the estimated read counts of each genome
+                # Confidence intervals: exact Poisson interval of the estimated read count of each genome
                 strains = add_read_counts(strains, read_sylph_profiles(profile_files))
                 strains = add_poisson_confidence_intervals(strains)
 
@@ -597,6 +649,7 @@ def main() -> None:
             )
             calculated_depths = sylph_to_depth_table(strains, sample_map)
 
+        calculated_depths, n_removed_min_depth = apply_min_depth(calculated_depths, args.min_depth)
         samples = set(calculated_depths["sample"])
         unused_fastq_samples = sorted(set(fastq_files_by_sample) - samples)
         if unused_fastq_samples:
@@ -608,13 +661,14 @@ def main() -> None:
         # ----------------------
         # Compute scaling factors (bases counted in the FASTQ files)
         # ----------------------
-        scaling_factors = calculate_scaling_factors(
+        scaling_factors, reused_scaling_factors = calculate_scaling_factors(
             samples=samples,
             sample_by_bam=None,
             initial_dna_mass=initial_dna_mass,
             scaling_factors_file=scaling_factors_file,
             n_workers=args.threads,
             fastq_files_by_sample=fastq_files_by_sample,
+            overwrite=args.overwrite_scaling_factors,
         )
 
     unused_ids = sorted(set(known_sample_ids) - set(calculated_depths["sample"]))
@@ -665,6 +719,9 @@ def main() -> None:
                 "calibrated_depth",
                 "calibrated_error_down",
                 "calibrated_error_up",
+                "scaling_factor",
+                "read_counts",
+                "error_note",
             ],
         ]
     )
@@ -679,6 +736,26 @@ def main() -> None:
     # In SingleM/Sylph mode, missing errors (no confidence interval available) are written as NA.
     calibrated_depths.to_csv(args.output, index=False, na_rep="NA" if fastq_mode else "")
     logging.info(f"Results saved to: {args.output}")
+
+    write_run_info(
+        args.output,
+        args,
+        mode_name,
+        extra={
+            "data": {
+                "n_samples": int(calibrated_depths["sample"].nunique()),
+                "n_output_rows": int(len(calibrated_depths)),
+                "n_rows_removed_by_min_depth": n_removed_min_depth,
+                "n_rows_without_error_estimate": int(calibrated_depths["error_down"].isna().sum()),
+            },
+            "scaling_factors": {
+                "file": scaling_factors_file,
+                "overwritten": bool(args.overwrite_scaling_factors),
+                "reused_from_file": reused_scaling_factors,
+                "calculated_in_this_run": sorted(set(calibrated_depths["sample"]) - set(reused_scaling_factors)),
+            },
+        },
+    )
 
     # ----------------------
     # Final message
