@@ -2,20 +2,20 @@
 
 
 **MGCalibrator** is a command-line tool for **metagenomic absolute abundance calibration**.
-It converts sequencing-derived coverage information into **absolute abundances (number of copies)**. Three input modes are supported (use exactly one of them):
-
-* **BAM mode**: BAM files as input. Results include **statistical confidence intervals**.
-* **SingleM mode**: SingleM output files + the raw FASTQ files as input. The SingleM species-level coverage values are used as depths.
-* **Sylph mode**: Sylph results (`.sylphmpa` files from `sylph-tax taxprof`, optionally with the `sylph profile` TSV files) + the raw FASTQ files as input. The Sylph strain-level coverage values (`True_cov`) are used as depths. Confidence intervals can be calculated from the estimated read counts of Sylph. **Sylph must be run with `--estimate-unknown`, and with `--estimate-read-counts` if you want confidence intervals** (see [Preparing Sylph input](#-preparing-sylph-input)).
-
-All modes produce an output file with the same columns.
-
-This enables **cross-sample comparison** by correcting for:
+It converts sequencing-derived coverage information into **absolute abundances (number of copies)**. This enables **cross-sample comparison** by correcting for:
 
 * differences in sequencing depth, and
 * differences in the total DNA input before sequencing.
 
-The tool uses per-sample scaling factors and, in BAM mode, Monte Carlo simulation to estimate measurement uncertainty.
+The tool uses per-sample scaling factors and estimates measurement uncertainty.
+
+Three input modes are supported (use exactly one of them):
+
+* **BAM mode**: BAM files as input. 
+* **SingleM mode**: SingleM output files + the raw FASTQ files as input. The SingleM species-level coverage values are used as depths.
+* **Sylph mode**: Sylph results (`.sylphmpa` files from `sylph-tax taxprof`, optionally with the `sylph profile` TSV files) + the raw FASTQ files as input. The Sylph strain-level coverage values (`True_cov`) are used as depths. Confidence intervals can be calculated from the estimated read counts of Sylph. **Sylph must be run with `--estimate-unknown`, and with `--estimate-read-counts` if you want confidence intervals** (see [Preparing Sylph input](#-preparing-sylph-input)).
+
+All modes produce an output file with the same columns.
 
 ---
 
@@ -57,7 +57,7 @@ MGCalibrator performs the following steps:
 mamba install -c conda-forge -c bioconda mgcalibrator
 ```
 
-This installs MGCalibrator together with all its dependencies, including `samtools` and `coverm` for BAM mode. (Available once the recipe has been added to Bioconda; see [`packaging/bioconda`](packaging/bioconda).)
+This installs MGCalibrator together with all its dependencies, including `samtools` and `coverm` for BAM mode. 
 
 ### From source
 
