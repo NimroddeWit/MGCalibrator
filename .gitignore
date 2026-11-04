@@ -38,6 +38,7 @@ MGCalibrator/__pycache__/*
 data/output/output.csv
 data/output/scaling_factors.txt
 data/output/test*
+data/output/*_run_info.json
 
 __pycache__/
 *.pyc
