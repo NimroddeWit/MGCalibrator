@@ -177,7 +177,7 @@ def main() -> None:
             "Sylph mode (optional): one or more folders (or files) with the `sylph profile` output\n"
             "TSV files that the .sylphmpa files were made from (single- or multi-sample TSVs).\n"
             "Used to calculate confidence intervals around the coverage (error_down and error_up):\n"
-            "the exact Poisson 95% interval of the estimated number of reads per genome (column\n"
+            "the exact Poisson 95%% interval of the estimated number of reads per genome (column\n"
             "Sequence_abundance) is applied to the coverage. Requires `sylph profile\n"
             "--estimate-read-counts` (Sylph >= 0.9.0).\n"
             "The confidence intervals that Sylph reports itself are not used."
@@ -201,7 +201,7 @@ def main() -> None:
         "--fastq_extensions",
         nargs="*",
         default=DEFAULT_FASTQ_EXTENSIONS,
-        help="SingleM mode: FASTQ file extensions to search for (default: .fastq.gz .fq.gz .fastq .fq).",
+        help="SingleM/Sylph mode: FASTQ file extensions to search for (default: .fastq.gz .fq.gz .fastq .fq).",
     )
     parser.add_argument(
         "--singlem_extensions",
